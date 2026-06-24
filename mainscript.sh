@@ -139,8 +139,8 @@ run_protocol_install() {
     local protocol_name="$1"
     local script_name="$2"
     local script_path="${SCRIPTS_DIR}/${script_name}"
-
-    log "downloading ${script_name}"
+    
+    log "downloading ${script_path}"
 
     curl -fsSL -o "$script_path" "${REPO_RAW_BASE}/${script_name}" >> "$LOG_FILE" 2>&1
 
