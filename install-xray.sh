@@ -2,20 +2,8 @@
 #
 # install-xray.sh
 #
-# Installs and configures Xray based on config.json.
-# Both the xray binary and its runtime config.json are pulled from
-# rp-files/xray and always overwritten (idempotent: source of truth lives
-# in the repo, not built locally).
-#
-# Expected to be called by mainscript.sh, which already installed base
-# dependencies (jq, curl, unzip, etc). This script only adds what's
-# specific to Xray.
-#
 set -uo pipefail
 
-# ──────────────────────────────────────────────
-# Paths and constants
-# ──────────────────────────────────────────────
 CONFIG_JSON="${CONFIG_JSON:-/opt/rocket-plus/config.json}"
 
 RP_FILES_XRAY_BASE="https://raw.githubusercontent.com/farhad-apps/rp-files/main/xray"
@@ -49,9 +37,6 @@ require_cmd() {
     fi
 }
 
-# ──────────────────────────────────────────────
-# Load values from config.json
-# ──────────────────────────────────────────────
 load_config() {
     if [ ! -f "$CONFIG_JSON" ]; then
         err "config.json not found at '$CONFIG_JSON'."
@@ -63,7 +48,7 @@ load_config() {
     PANEL_URL=$(jq -r '.panel_url // empty' "$CONFIG_JSON")
     API_TOKEN=$(jq -r '.api_token // empty' "$CONFIG_JSON")
     XRAY_ENABLED=$(jq -r '.xray.enabled // false' "$CONFIG_JSON")
-    XRAY_BIN=$(jq -r '.xray.bin // empty' "$CONFIG_JSON")
+    XRAY_PATH=$(jq -r '.xray.path // empty' "$CONFIG_JSON")
     XRAY_PORT=$(jq -r '.xray.port // empty' "$CONFIG_JSON")
     XRAY_CONFIG_PATH=$(jq -r '.xray.config_path // empty' "$CONFIG_JSON")
 
@@ -77,23 +62,21 @@ load_config() {
         exit 1
     fi
 
-    if [ -z "$XRAY_BIN" ] || [ -z "$XRAY_PORT" ] || [ -z "$XRAY_CONFIG_PATH" ]; then
-        err "xray.bin, xray.port or xray.config_path is not defined in config.json. Expected example:
-  \"xray\": { \"enabled\": true, \"bin\": \"/opt/rocket-plus/xray/xray-cli\", \"port\": 62789, \"config_path\": \"/opt/rocket-plus/xray/config.json\" }"
+    if [ -z "$XRAY_PATH" ] || [ -z "$XRAY_PORT" ] || [ -z "$XRAY_CONFIG_PATH" ]; then
+        err "xray.path, xray.port or xray.config_path is not defined in config.json. Expected example:
+  \"xray\": { \"enabled\": true, \"path\": \"/usr/local/bin/rxray/\", \"port\": 62789, \"config_path\": \"/usr/local/bin/rxray/config.json\" }"
         exit 1
     fi
 
-    XRAY_INSTALL_DIR=$(dirname "$XRAY_BIN")
+    XRAY_EXECUTABLE="${XRAY_PATH%/}/xray-cli"
 
     log "PANEL_URL=$PANEL_URL"
-    log "XRAY_BIN=$XRAY_BIN"
+    log "XRAY_PATH=$XRAY_PATH"
+    log "XRAY_EXECUTABLE=$XRAY_EXECUTABLE"
     log "XRAY_PORT=$XRAY_PORT"
     log "XRAY_CONFIG_PATH=$XRAY_CONFIG_PATH"
 }
 
-# ──────────────────────────────────────────────
-# Stop existing service before overwriting binary/config (idempotent)
-# ──────────────────────────────────────────────
 stop_existing_service() {
     if systemctl is-active --quiet rsxray 2>/dev/null; then
         log "stopping existing rsxray service..."
@@ -101,11 +84,8 @@ stop_existing_service() {
     fi
 }
 
-# ──────────────────────────────────────────────
-# Download and extract xray-cli.zip into xray.bin's directory
-# ──────────────────────────────────────────────
 install_xray_binary() {
-    mkdir -p "$XRAY_INSTALL_DIR"
+    mkdir -p "$XRAY_PATH"
 
     local tmp_zip
     tmp_zip=$(mktemp /tmp/xray-cli.XXXXXX.zip)
@@ -119,22 +99,19 @@ install_xray_binary() {
         exit 1
     fi
 
-    unzip -o "$tmp_zip" -d "$XRAY_INSTALL_DIR"
+    unzip -o "$tmp_zip" -d "$XRAY_PATH"
     rm -f "$tmp_zip"
 
-    if [ ! -f "$XRAY_BIN" ]; then
-        err "xray binary not found at '$XRAY_BIN' after extracting xray-cli.zip. Check the zip contents/path."
+    if [ ! -f "$XRAY_EXECUTABLE" ]; then
+        err "xray-cli not found at '$XRAY_EXECUTABLE' after extracting xray-cli.zip."
         exit 1
     fi
 
-    chmod +x "$XRAY_BIN"
+    chmod +x "$XRAY_EXECUTABLE"
 
-    log "xray binary installed at ${XRAY_BIN}."
+    log "xray-cli.zip extracted into ${XRAY_PATH}."
 }
 
-# ──────────────────────────────────────────────
-# Download runtime config.json (always overwritten, source of truth is the repo)
-# ──────────────────────────────────────────────
 install_xray_runtime_config() {
     local config_dir
     config_dir=$(dirname "$XRAY_CONFIG_PATH")
@@ -152,9 +129,6 @@ install_xray_runtime_config() {
     log "xray runtime config.json installed at ${XRAY_CONFIG_PATH}."
 }
 
-# ──────────────────────────────────────────────
-# Logging setup
-# ──────────────────────────────────────────────
 setup_xray_log() {
     install -d -m 700 -o nobody -g nogroup /var/log/xray
     install -m 600 -o nobody -g nogroup /dev/null /var/log/xray/error.log
@@ -162,9 +136,6 @@ setup_xray_log() {
     log "xray log directory configured."
 }
 
-# ──────────────────────────────────────────────
-# systemd service
-# ──────────────────────────────────────────────
 install_xray_service() {
     cat > "$XRAY_SERVICE_FILE" << EOF
 [Unit]
@@ -174,7 +145,7 @@ After=network.target nss-lookup.target
 
 [Service]
 User=root
-ExecStart=${XRAY_BIN} run -config ${XRAY_CONFIG_PATH}
+ExecStart=${XRAY_EXECUTABLE} run -config ${XRAY_CONFIG_PATH}
 Restart=on-failure
 RestartPreventExitStatus=23
 LimitNPROC=10000
@@ -188,21 +159,15 @@ EOF
     systemctl enable rsxray
     systemctl restart rsxray
 
-    log "rsxray service started (ExecStart: ${XRAY_BIN} run -config ${XRAY_CONFIG_PATH})."
+    log "rsxray service started (ExecStart: ${XRAY_EXECUTABLE} run -config ${XRAY_CONFIG_PATH})."
 }
 
-# ──────────────────────────────────────────────
-# Notify panel that install completed
-# ──────────────────────────────────────────────
 complete_install() {
     local api_address="${PANEL_URL}/confirm-installed?token=${API_TOKEN}&setup=xray"
     curl -fsS -m 10 "$api_address" >/dev/null 2>&1 || log "warning: panel notification failed (network or panel unreachable)."
     log "Xray install completed."
 }
 
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
 main() {
     require_root
     load_config
