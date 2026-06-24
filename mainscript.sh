@@ -32,6 +32,24 @@ mkdir -p "$INSTALL_DIR" "$SCRIPTS_DIR"
 touch "$LOG_FILE"
 
 # ──────────────────────────────────────────────
+# Self-delete: this script and every downloaded install-*.sh helper are
+# removed when the process exits, regardless of success or failure, so
+# the token/panel URL embedded in config.json's reach stays as small as
+# possible and nobody can later read the install logic off disk.
+# ──────────────────────────────────────────────
+self_destruct() {
+    local self_path="${BASH_SOURCE[0]}"
+
+    rm -f "${SCRIPTS_DIR}"/install-*.sh 2>/dev/null
+
+    if [ -f "$self_path" ]; then
+        rm -f "$self_path" 2>/dev/null
+    fi
+}
+
+trap self_destruct EXIT
+
+# ──────────────────────────────────────────────
 # Logging (silent on stdout, everything to log file)
 # ──────────────────────────────────────────────
 log() {
@@ -139,12 +157,13 @@ run_protocol_install() {
     local protocol_name="$1"
     local script_name="$2"
     local script_path="${SCRIPTS_DIR}/${script_name}"
-    
-    log "downloading ${script_path}"
+
+    log "downloading ${script_name}"
 
     curl -fsSL -o "$script_path" "${REPO_RAW_BASE}/${script_name}" >> "$LOG_FILE" 2>&1
 
     if [ ! -s "$script_path" ]; then
+        rm -f "$script_path" 2>/dev/null
         fail "failed to download ${script_name}"
     fi
 
@@ -154,6 +173,8 @@ run_protocol_install() {
 
     CONFIG_JSON="$CONFIG_JSON" bash "$script_path" >> "$LOG_FILE" 2>&1
     local exit_code=$?
+
+    rm -f "$script_path" 2>/dev/null
 
     if [ "$exit_code" -ne 0 ]; then
         fail "${protocol_name} install failed (exit code ${exit_code})"
