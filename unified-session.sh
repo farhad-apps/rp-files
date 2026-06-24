@@ -1,8 +1,9 @@
 #!/bin/bash
 set -uo pipefail
 
-PANEL_BASE_URL="{ApiUrl}"
-API_KEY="{ApiKey}"
+CONFIG_JSON="${CONFIG_JSON:-/opt/rocket-plus/config.json}"
+PANEL_URL=$(jq -r '.panel_url // empty' "$CONFIG_JSON")
+API_TOKEN=$(jq -r '.api_token // empty' "$CONFIG_JSON")
 TIMEOUT=5
 LOG_FILE="/var/log/unified-session.log"
 
@@ -45,8 +46,7 @@ if [ -n "${script_type:-}" ]; then
 elif [ -n "${PAM_TYPE:-}" ]; then
     protocol="ssh"
     user="${PAM_USER:-}"
-
-    # فقط کاربران گروه rocket
+    
     if ! id -nG "$user" 2>/dev/null | grep -qw "rocket"; then
         exit 0
     fi
@@ -67,13 +67,13 @@ fi
 # ────────────────────────────────────────────
 # Send to panel
 # ────────────────────────────────────────────
-apiUrl="${PANEL_BASE_URL}/${endpoint}"
+apiUrl="${PANEL_URL}/${endpoint}"
 
 response=$(curl -s -o /dev/null -w "%{http_code}" \
     -m "$TIMEOUT" \
     -X POST \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: $API_KEY" \
+    -H "X-API-Key: $API_TOKEN" \
     -d "$jsonData" \
     "$apiUrl" 2>/dev/null) || response="000"
 
