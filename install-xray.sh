@@ -22,7 +22,7 @@ RP_FILES_XRAY_BASE="https://raw.githubusercontent.com/farhad-apps/rp-files/main/
 XRAY_CLI_ZIP_URL="${RP_FILES_XRAY_BASE}/xray-cli.zip"
 XRAY_RUNTIME_CONFIG_URL="${RP_FILES_XRAY_BASE}/config.json"
 
-XRAY_SERVICE_FILE="/etc/systemd/system/rxray.service"
+XRAY_SERVICE_FILE="/etc/systemd/system/rsxray.service"
 
 LOG_PREFIX="[install-xray]"
 
@@ -83,12 +83,6 @@ load_config() {
         exit 1
     fi
 
-    # xray.config_path is expected to already exist (created by the panel/PHP side)
-    if [ ! -f "$XRAY_CONFIG_PATH" ]; then
-        err "xray.config_path ('$XRAY_CONFIG_PATH') does not exist. It must be created beforehand by the panel."
-        exit 1
-    fi
-
     XRAY_INSTALL_DIR=$(dirname "$XRAY_BIN")
 
     log "PANEL_URL=$PANEL_URL"
@@ -101,9 +95,9 @@ load_config() {
 # Stop existing service before overwriting binary/config (idempotent)
 # ──────────────────────────────────────────────
 stop_existing_service() {
-    if systemctl is-active --quiet rxray 2>/dev/null; then
-        log "stopping existing rxray service..."
-        systemctl stop rxray
+    if systemctl is-active --quiet rsxray 2>/dev/null; then
+        log "stopping existing rsxray service..."
+        systemctl stop rsxray
     fi
 }
 
@@ -142,6 +136,10 @@ install_xray_binary() {
 # Download runtime config.json (always overwritten, source of truth is the repo)
 # ──────────────────────────────────────────────
 install_xray_runtime_config() {
+    local config_dir
+    config_dir=$(dirname "$XRAY_CONFIG_PATH")
+    mkdir -p "$config_dir"
+
     log "downloading xray runtime config.json..."
 
     curl -fsSL -o "$XRAY_CONFIG_PATH" "$XRAY_RUNTIME_CONFIG_URL"
@@ -187,10 +185,10 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable rxray
-    systemctl restart rxray
+    systemctl enable rsxray
+    systemctl restart rsxray
 
-    log "rxray service started (ExecStart: ${XRAY_BIN} run -config ${XRAY_CONFIG_PATH})."
+    log "rsxray service started (ExecStart: ${XRAY_BIN} run -config ${XRAY_CONFIG_PATH})."
 }
 
 # ──────────────────────────────────────────────
