@@ -18,7 +18,7 @@ set -uo pipefail
 CONFIG_JSON="${CONFIG_JSON:-/opt/rocket-plus/config.json}"
 
 OVPN_DIR="/etc/openvpn"
-RP_FILES_BASE="https://raw.githubusercontent.com/farhad-apps/rc-files/main/openvpn"
+RP_FILES_BASE="https://raw.githubusercontent.com/farhad-apps/rp-files/main/openvpn"
 CERTS_ZIP_URL="${RP_FILES_BASE}/certs.zip"
 SERVER_CONF_URL="${RP_FILES_BASE}/ovpn-server.conf"
 CLIENT_CONF_URL="${RP_FILES_BASE}/ovpn-client.conf"
