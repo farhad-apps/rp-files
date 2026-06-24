@@ -10,7 +10,7 @@ RP_FILES_XRAY_BASE="https://raw.githubusercontent.com/farhad-apps/rp-files/main/
 XRAY_CLI_ZIP_URL="${RP_FILES_XRAY_BASE}/xray-cli.zip"
 XRAY_RUNTIME_CONFIG_URL="${RP_FILES_XRAY_BASE}/config.json"
 
-XRAY_SERVICE_FILE="/etc/systemd/system/rsxray.service"
+XRAY_SERVICE_FILE="/etc/systemd/system/rxray.service"
 
 LOG_PREFIX="[install-xray]"
 
@@ -79,9 +79,9 @@ load_config() {
 }
 
 stop_existing_service() {
-    if systemctl is-active --quiet rsxray 2>/dev/null; then
-        log "stopping existing rsxray service..."
-        systemctl stop rsxray
+    if systemctl is-active --quiet rxray 2>/dev/null; then
+        log "stopping existing rxray service..."
+        systemctl stop rxray
     fi
 }
 
@@ -216,10 +216,10 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable rsxray
-    systemctl restart rsxray
+    systemctl enable rxray
+    systemctl restart rxray
 
-    log "rsxray service started (ExecStart: ${XRAY_EXECUTABLE} run -config ${XRAY_CONFIG_PATH})."
+    log "rxray service started (ExecStart: ${XRAY_EXECUTABLE} run -config ${XRAY_CONFIG_PATH})."
 }
 
 complete_install() {
