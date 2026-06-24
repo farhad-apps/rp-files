@@ -18,11 +18,11 @@ set -uo pipefail
 CONFIG_JSON="${CONFIG_JSON:-/opt/rocket-plus/config.json}"
 
 OVPN_DIR="/etc/openvpn"
-RC_FILES_BASE="https://raw.githubusercontent.com/farhad-apps/rc-files/main/openvpn"
-CERTS_ZIP_URL="${RC_FILES_BASE}/certs.zip"
-SERVER_CONF_URL="${RC_FILES_BASE}/ovpn-server.conf"
-CLIENT_CONF_URL="${RC_FILES_BASE}/ovpn-client.conf"
-CLIENT_GENERATOR_URL="${RC_FILES_BASE}/gen-client-conf.sh"
+RP_FILES_BASE="https://raw.githubusercontent.com/farhad-apps/rc-files/main/openvpn"
+CERTS_ZIP_URL="${RP_FILES_BASE}/certs.zip"
+SERVER_CONF_URL="${RP_FILES_BASE}/ovpn-server.conf"
+CLIENT_CONF_URL="${RP_FILES_BASE}/ovpn-client.conf"
+CLIENT_GENERATOR_URL="${RP_FILES_BASE}/gen-client-conf.sh"
 
 UNIFIED_SESSION_URL="https://raw.githubusercontent.com/farhad-apps/rp-files/main/unified-session.sh"
 UNIFIED_SESSION_PATH="/usr/local/bin/unified-session.sh"
