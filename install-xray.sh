@@ -68,7 +68,8 @@ load_config() {
         exit 1
     fi
 
-    XRAY_EXECUTABLE="${XRAY_PATH%/}/xray-cli"
+    XRAY_PATH="${XRAY_PATH%/}/"
+    XRAY_EXECUTABLE="${XRAY_PATH}xray"
 
     log "PANEL_URL=$PANEL_URL"
     log "XRAY_PATH=$XRAY_PATH"
@@ -82,6 +83,63 @@ stop_existing_service() {
         log "stopping existing rsxray service..."
         systemctl stop rsxray
     fi
+}
+
+get_cpu_vendor() {
+    local MACHINE
+    case "$(uname -m)" in
+        'i386' | 'i686')        MACHINE='32' ;;
+        'amd64' | 'x86_64')     MACHINE='64' ;;
+        'armv5tel')             MACHINE='arm32-v5' ;;
+        'armv6l')
+            MACHINE='arm32-v6'
+            grep Features /proc/cpuinfo | grep -qw 'vfp' || MACHINE='arm32-v5'
+            ;;
+        'armv7' | 'armv7l')
+            MACHINE='arm32-v7a'
+            grep Features /proc/cpuinfo | grep -qw 'vfp' || MACHINE='arm32-v5'
+            ;;
+        'armv8' | 'aarch64')    MACHINE='arm64-v8a' ;;
+        'mips')                 MACHINE='mips32' ;;
+        'mipsle')               MACHINE='mips32le' ;;
+        'mips64')
+            MACHINE='mips64'
+            lscpu | grep -q "Little Endian" && MACHINE='mips64le'
+            ;;
+        'mips64le')             MACHINE='mips64le' ;;
+        'ppc64')                MACHINE='ppc64' ;;
+        'ppc64le')              MACHINE='ppc64le' ;;
+        'riscv64')              MACHINE='riscv64' ;;
+        's390x')                MACHINE='s390x' ;;
+        *)
+            err "the architecture is not supported."
+            exit 1
+            ;;
+    esac
+    echo "$MACHINE"
+}
+
+install_xray() {
+    mkdir -p "$XRAY_PATH"
+
+    local arch
+    arch=$(get_cpu_vendor)
+
+    local url
+    url=$(wget -q -O- https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq --arg v "Xray-linux-$arch.zip" -r '.assets[] | select(.name == $v) | .browser_download_url')
+
+    if [ -z "$url" ] || [ "$url" = "null" ]; then
+        err "could not resolve download URL for Xray-linux-${arch}.zip from GitHub releases."
+        exit 1
+    fi
+
+    log "downloading xray from ${url}..."
+
+    wget -O "${XRAY_PATH}xray.zip" "$url"
+    unzip -o "${XRAY_PATH}xray.zip" -d "$XRAY_PATH"
+    rm -f "${XRAY_PATH}xray.zip"
+
+    log "xray installed into ${XRAY_PATH}."
 }
 
 install_xray_binary() {
@@ -102,12 +160,14 @@ install_xray_binary() {
     unzip -o "$tmp_zip" -d "$XRAY_PATH"
     rm -f "$tmp_zip"
 
-    if [ ! -f "$XRAY_EXECUTABLE" ]; then
-        err "xray-cli not found at '$XRAY_EXECUTABLE' after extracting xray-cli.zip."
+    local xray_cli_path="${XRAY_PATH}xray-cli"
+
+    if [ ! -f "$xray_cli_path" ]; then
+        err "xray-cli not found at '$xray_cli_path' after extracting xray-cli.zip."
         exit 1
     fi
 
-    chmod +x "$XRAY_EXECUTABLE"
+    chmod +x "$xray_cli_path"
 
     log "xray-cli.zip extracted into ${XRAY_PATH}."
 }
@@ -172,6 +232,7 @@ main() {
     require_root
     load_config
     stop_existing_service
+    install_xray
     install_xray_binary
     install_xray_runtime_config
     setup_xray_log
