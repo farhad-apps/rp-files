@@ -102,7 +102,7 @@ install_acme() {
     fi
 
     log "installing acme.sh..."
-    curl -fsSL https://get.acme.sh | sh -s email=admin@rocket-plus.local
+    curl -fsSL https://get.acme.sh | sh -s email=admin@rocket-plus.com
 
     if [ ! -x "$ACME_BIN" ]; then
         err "acme.sh installation failed, binary not found at ${ACME_BIN}."
