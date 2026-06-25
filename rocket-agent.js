@@ -202,7 +202,11 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 
    function sendJson(res, status, body) {
       const payload = JSON.stringify(body);
-      res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) });
+      res.writeHead(status, {
+         "Content-Type": "application/json",
+         "Content-Length": Buffer.byteLength(payload),
+         "Access-Control-Allow-Origin": "*",
+      });
       res.end(payload);
    }
 
@@ -213,6 +217,18 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 
    async function handleRequest(req, res) {
       try {
+         // CORS preflight - browsers send this before the real request and
+         // never include X-API-Key, so it must be answered before auth.
+         if (req.method === "OPTIONS") {
+            res.writeHead(204, {
+               "Access-Control-Allow-Origin": "*",
+               "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+               "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
+               "Access-Control-Max-Age": "86400",
+            });
+            return res.end();
+         }
+
          const url = new URL(req.url, "http://localhost");
          const routeKey = `${req.method} ${url.pathname}`;
 
