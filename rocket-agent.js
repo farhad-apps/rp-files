@@ -943,7 +943,7 @@ async function boot() {
 
    XrayFullConfig.start();
    JobRunner.start();
-   ServerStats.start();
+   // ServerStats.start();
    Traffic.startXray();
    Traffic.startSsh();
    Traffic.startOvpn();
