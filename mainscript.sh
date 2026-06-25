@@ -195,6 +195,10 @@ setup_ovpn() {
     run_protocol_install "openvpn" "install-ovpn.sh"
 }
 
+setup_ssl() {
+    run_protocol_install "ssl" "install-ssl.sh"
+}
+
 # ──────────────────────────────────────────────
 # Bootstrap: deps + agent (always runs before any protocol)
 # ──────────────────────────────────────────────
@@ -218,6 +222,7 @@ Commands:
   setup-ssh     Install and configure SSH
   setup-xray    Install and configure Xray
   setup-ovpn    Install and configure OpenVPN
+  setup-ssl     Issue/install SSL certificate for the server's IP
   setup-all     Run all three (based on protocols enabled in config.json)
 EOF
 }
@@ -240,6 +245,10 @@ main() {
         setup-ovpn)
             bootstrap
             setup_ovpn
+            ;;
+        setup-ssl)
+            bootstrap
+            setup_ssl
             ;;
         setup-all)
             bootstrap
