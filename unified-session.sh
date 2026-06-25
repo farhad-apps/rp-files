@@ -67,7 +67,7 @@ fi
 # ────────────────────────────────────────────
 # Send to panel
 # ────────────────────────────────────────────
-apiUrl="${PANEL_URL}/${endpoint}"
+apiUrl="${PANEL_URL}/session/${endpoint}"
 
 response=$(curl -s -o /dev/null -w "%{http_code}" \
     -m "$TIMEOUT" \
