@@ -40,6 +40,7 @@ class APIError extends AgentError {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const CONFIG_PATH = `${__dirname}/config.json`;
+const SETUP_LOG_PATH = `${__dirname}/mainscript.log`;
 
 const DEFAULTS = {
    agent: {
@@ -71,6 +72,7 @@ const DEFAULTS = {
    },
    xray: {
       enabled: false,
+      path: "/usr/local/bin/",
       bin: "/usr/local/bin/rxray",
       port: 62789,
       config_path: "/usr/local/bin/rxray/config.json",
@@ -130,26 +132,26 @@ setInterval(() => {
 // ─── Config Accessors (ساده‌سازی دسترسی به مقادیر پرکاربرد) ─────────────────
 
 const cfg = {
-   get sshEnabled()       { return !!config.ssh?.enabled; },
-   get ovpnEnabled()      { return !!config.openvpn?.enabled; },
-   get xrayEnabled()      { return !!config.xray?.enabled; },
-   get sshTrafficEnabled(){ return !!config.ssh?.features?.traffic; },
+   get sshEnabled() { return !!config.ssh?.enabled; },
+   get ovpnEnabled() { return !!config.openvpn?.enabled; },
+   get xrayEnabled() { return !!config.xray?.enabled; },
+   get sshTrafficEnabled() { return !!config.ssh?.features?.traffic; },
 
-   get maxJobs()          { return config.agent?.max_jobs ?? 5; },
+   get maxJobs() { return config.agent?.max_jobs ?? 5; },
 
-   get jobsInterval()     { return config.agent?.intervals?.jobs ?? 5000; },
-   get statsInterval()    { return config.agent?.intervals?.stats ?? 60000; },
+   get jobsInterval() { return config.agent?.intervals?.jobs ?? 5000; },
+   get statsInterval() { return config.agent?.intervals?.stats ?? 60000; },
    get remoteConfigInterval() { return config.agent?.intervals?.config ?? 60000; },
-   get xrayConfigInterval()   { return config.xray?.intervals?.config ?? 300000; },
+   get xrayConfigInterval() { return config.xray?.intervals?.config ?? 300000; },
 
-   get sshTrafficInterval()  { return config.ssh?.intervals?.traffic ?? 60000; },
+   get sshTrafficInterval() { return config.ssh?.intervals?.traffic ?? 60000; },
    get ovpnTrafficInterval() { return config.openvpn?.intervals?.traffic ?? 60000; },
    get xrayTrafficInterval() { return config.xray?.intervals?.traffic ?? 30000; },
 
-   get sshOnlineInterval()  { return config.ssh?.intervals?.online ?? 60000; },
+   get sshOnlineInterval() { return config.ssh?.intervals?.online ?? 60000; },
    get ovpnOnlineInterval() { return config.openvpn?.intervals?.online ?? 60000; },
 
-   get apiConfig()  { return config.agent?.api ?? {}; },
+   get apiConfig() { return config.agent?.api ?? {}; },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -181,6 +183,10 @@ function buildWebApi({ getConfig, ServerStats, System }) {
       "GET /server/stats": async () => {
          const stats = await ServerStats.collect({ send: false });
          return { status: 200, body: stats };
+      },
+      "GET /server/setup-log": async () => {
+         const result = await ServerStats.getSetupLogs({ send: false });
+         return { status: 200, body: result };
       },
       "POST /system/restart-xray": async () => {
          await System.restartXray();
@@ -261,13 +267,13 @@ function buildWebApi({ getConfig, ServerStats, System }) {
       }
 
       const certFile = apiCfg.cert_file;
-      const keyFile  = apiCfg.cert_key;
-      const hasCert  = certFile && keyFile && fs.existsSync(certFile) && fs.existsSync(keyFile);
+      const keyFile = apiCfg.cert_key;
+      const hasCert = certFile && keyFile && fs.existsSync(certFile) && fs.existsSync(keyFile);
 
       if (hasCert) {
          try {
             const cert = fs.readFileSync(certFile);
-            const key  = fs.readFileSync(keyFile);
+            const key = fs.readFileSync(keyFile);
             server = https.createServer({ key, cert }, handleRequest);
             server.listen(port, () => console.log(`[web-api] HTTPS listening on port ${port}`));
          } catch (err) {
@@ -293,7 +299,7 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 // ─── XrayCLI ──────────────────────────────────────────────────────────────────
 
 class XrayCLI {
-   get bin()  { return config.xray.bin; }
+   get bin() { return config.xray.bin; }
    get port() { return config.xray.port; }
 
    _run(command, args = null) {
@@ -323,11 +329,11 @@ class XrayCLI {
       }
    }
 
-   addInbound(cfg)                         { return this._run("add-inbound", cfg); }
-   delInbound(tag)                         { return this._run("del-inbound", { tag }); }
-   addUser(protocol, tag, email, extras)   { return this._run("add-user", { protocol, tag, email, ...extras }); }
-   removeUser(tag, email)                  { return this._run("remove-user", { tag, email }); }
-   getTraffic()                            { return this._run("get-traffic"); }
+   addInbound(cfg) { return this._run("add-inbound", cfg); }
+   delInbound(tag) { return this._run("del-inbound", { tag }); }
+   addUser(protocol, tag, email, extras) { return this._run("add-user", { protocol, tag, email, ...extras }); }
+   removeUser(tag, email) { return this._run("remove-user", { tag, email }); }
+   getTraffic() { return this._run("get-traffic"); }
 }
 
 const xrayCLI = new XrayCLI();
@@ -394,19 +400,19 @@ function request(method, endpoint, body = null, { retries = 2, retryDelay = 2000
 }
 
 const api = {
-   getJobs:           ()           => request("GET",  "agent/jobs"),
-   completeJob:       (id, result) => request("POST", `agent/jobs/${id}/done`, { result }),
-   failJob:           (id, error)  => request("POST", `agent/jobs/${id}/fail`, { error }),
-   getInboundClients: (inboundId)  => request("GET",  `agent/inbounds/${inboundId}/clients`),
-   getFullSync:       ()           => request("GET",  "agent/sync"),
-   getAgentConfig:    ()           => request("GET",  "agent/config"),
-   getXrayFullConfig: ()           => request("GET",  "agent/xray/config"),
-   sendServerStats:   (data)       => request("POST", "agent/server/stats",      { data }),
-   sendXrayTraffic:   (data)       => request("POST", "agent/traffic/xray",      { data }),
-   sendSshTraffic:    (data)       => request("POST", "agent/traffic/ssh",        { data }),
-   sendOvpnTraffic:   (clients)    => request("POST", "agent/traffic/openvpn",   { clients }),
-   sendSshOnline:     (users)      => request("POST", "agent/online/ssh",         { users }),
-   sendOvpnOnline:    (clients)    => request("POST", "agent/online/openvpn",    { clients }),
+   getJobs: () => request("GET", "agent/jobs"),
+   completeJob: (id, result) => request("POST", `agent/jobs/${id}/done`, { result }),
+   failJob: (id, error) => request("POST", `agent/jobs/${id}/fail`, { error }),
+   getInboundClients: (inboundId) => request("GET", `agent/inbounds/${inboundId}/clients`),
+   getFullSync: () => request("GET", "agent/sync"),
+   getAgentConfig: () => request("GET", "agent/config"),
+   getXrayFullConfig: () => request("GET", "agent/xray/config"),
+   sendServerStats: (data) => request("POST", "agent/server/stats", { data }),
+   sendXrayTraffic: (data) => request("POST", "agent/traffic/xray", { data }),
+   sendSshTraffic: (data) => request("POST", "agent/traffic/ssh", { data }),
+   sendOvpnTraffic: (clients) => request("POST", "agent/traffic/openvpn", { clients }),
+   sendSshOnline: (users) => request("POST", "agent/online/ssh", { users }),
+   sendOvpnOnline: (clients) => request("POST", "agent/online/openvpn", { clients }),
 };
 
 // ─── SSH Actions ──────────────────────────────────────────────────────────────
@@ -518,7 +524,7 @@ const FullSync = {
 
       for (const inbound of data.inbounds ?? []) {
          try {
-            try { xrayCLI.delInbound(inbound.tag); } catch {}
+            try { xrayCLI.delInbound(inbound.tag); } catch { }
             xrayCLI.addInbound(inbound);
             results.inbounds++;
          } catch (err) {
@@ -558,19 +564,19 @@ const FullSync = {
 // ─── Job Runner ───────────────────────────────────────────────────────────────
 
 const ACTION_MAP = {
-   add_xray_inbound:    (p) => Xray.addInbound(p),
+   add_xray_inbound: (p) => Xray.addInbound(p),
    update_xray_inbound: (p) => Xray.updateInbound(p),
    remove_xray_inbound: (p) => Xray.removeInbound(p),
-   add_xray_client:     (p) => Xray.addClient(p),
-   remove_xray_client:  (p) => Xray.removeClient(p),
-   add_ssh_user:        (p) => SSH.addUser(p),
-   remove_ssh_user:     (p) => SSH.removeUser(p),
-   update_ssh_user:     (p) => SSH.updateUser(p),
-   sync_server:         ()  => FullSync.run(),
-   restart_xray:        ()  => System.restartXray(),
-   restart_ssh:         ()  => System.restartSsh(),
-   restart_openvpn:     ()  => System.restartOpenvpn(),
-   restart_agent:       ()  => System.restartAgent(),
+   add_xray_client: (p) => Xray.addClient(p),
+   remove_xray_client: (p) => Xray.removeClient(p),
+   add_ssh_user: (p) => SSH.addUser(p),
+   remove_ssh_user: (p) => SSH.removeUser(p),
+   update_ssh_user: (p) => SSH.updateUser(p),
+   sync_server: () => FullSync.run(),
+   restart_xray: () => System.restartXray(),
+   restart_ssh: () => System.restartSsh(),
+   restart_openvpn: () => System.restartOpenvpn(),
+   restart_agent: () => System.restartAgent(),
 };
 
 const JobRunner = {
@@ -587,7 +593,7 @@ const JobRunner = {
       if (JobRunner.busy) return;
       JobRunner.busy = true;
       try {
-         const res  = await api.getJobs();
+         const res = await api.getJobs();
          const jobs = res?.jobs ?? [];
          if (!jobs.length) return;
          console.log(`[jobs] Batch received: ${jobs.length} job(s)`);
@@ -646,7 +652,7 @@ const Traffic = {
                if (exitCode === 0 && stdout) {
                   const lines = stdout.split("\n").filter((l) => l.trim().startsWith("["));
                   if (lines.length) {
-                     const last    = lines[lines.length - 1];
+                     const last = lines[lines.length - 1];
                      const clients = JSON.parse(last)
                         .filter((c) => c.UID > 0 && c.name.startsWith("sshd:"))
                         .map((c) => ({
@@ -745,10 +751,10 @@ const Online = {
          if (!line.startsWith("CLIENT_LIST")) continue;
          const parts = line.split(",");
          if (parts.length < 6) continue;
-         const username      = parts[1];
-         const ip            = parts[2]?.split(":")[0];
+         const username = parts[1];
+         const ip = parts[2]?.split(":")[0];
          const bytesReceived = parseInt(parts[4]) || 0;
-         const bytesSent     = parseInt(parts[5]) || 0;
+         const bytesSent = parseInt(parts[5]) || 0;
          if (username && username !== "UNDEF") {
             clients.push({ username, ip, bytes_received: bytesReceived, bytes_sent: bytesSent });
          }
@@ -798,22 +804,22 @@ const ServerStats = {
       const [netIn, netOut] = net.stdout.split(" ").map(Number);
 
       const stats = {
-         cpu_usage:  parseFloat(cpuUsage.stdout) || 0,
-         cpu_cores:  parseInt(cpuCores) || 0,
-         cpu_model:  cpuModel,
-         cpu_mhz:    parseFloat(cpuMhz) || 0,
-         ram_total:  ramTotal || 0,
-         ram_used:   ramUsed || 0,
-         ram_free:   ramFree || 0,
+         cpu_usage: parseFloat(cpuUsage.stdout) || 0,
+         cpu_cores: parseInt(cpuCores) || 0,
+         cpu_model: cpuModel,
+         cpu_mhz: parseFloat(cpuMhz) || 0,
+         ram_total: ramTotal || 0,
+         ram_used: ramUsed || 0,
+         ram_free: ramFree || 0,
          disk_total: diskTotal || "0",
-         disk_used:  diskUsed || "0",
-         disk_free:  diskFree || "0",
-         net_in:     netIn || 0,
-         net_out:    netOut || 0,
-         load_avg:   loadAvg.stdout.trim(),
-         uptime:     parseInt(uptime.stdout) || 0,
-         os:         os.stdout.trim(),
-         kernel:     kernel.stdout.trim(),
+         disk_used: diskUsed || "0",
+         disk_free: diskFree || "0",
+         net_in: netIn || 0,
+         net_out: netOut || 0,
+         load_avg: loadAvg.stdout.trim(),
+         uptime: parseInt(uptime.stdout) || 0,
+         os: os.stdout.trim(),
+         kernel: kernel.stdout.trim(),
       };
 
       if (send) {
@@ -822,6 +828,12 @@ const ServerStats = {
       }
 
       return stats;
+   },
+
+   getSetupLogs: async () => {
+      console.log("[system] get setup log...");
+      const raw = fs.readFileSync(SETUP_LOG_PATH, "utf8");
+      return raw;
    },
 };
 
@@ -850,15 +862,15 @@ const RemoteConfig = {
             ...config.agent,
             ...remote.agent,
             intervals: { ...config.agent.intervals, ...(remote.agent?.intervals ?? {}) },
-            api:       { ...config.agent.api,       ...(remote.agent?.api       ?? {}) },
+            api: { ...config.agent.api, ...(remote.agent?.api ?? {}) },
          };
       }
       if (remote.ssh) {
          config.ssh = {
             ...config.ssh,
             ...remote.ssh,
-            features:  { ...config.ssh.features,  ...(remote.ssh?.features  ?? {}) },
-            intervals: { ...config.ssh.intervals,  ...(remote.ssh?.intervals ?? {}) },
+            features: { ...config.ssh.features, ...(remote.ssh?.features ?? {}) },
+            intervals: { ...config.ssh.intervals, ...(remote.ssh?.intervals ?? {}) },
          };
       }
       if (remote.openvpn) {
@@ -877,9 +889,9 @@ const RemoteConfig = {
       }
 
       console.log("[remote-config] Updated:", JSON.stringify({
-         ssh:     { enabled: cfg.sshEnabled,  traffic: cfg.sshTrafficEnabled },
+         ssh: { enabled: cfg.sshEnabled, traffic: cfg.sshTrafficEnabled },
          openvpn: { enabled: cfg.ovpnEnabled },
-         xray:    { enabled: cfg.xrayEnabled },
+         xray: { enabled: cfg.xrayEnabled },
       }));
    },
 };
@@ -934,7 +946,7 @@ const System = {
    restartAgent: async () => {
       console.log("[system] Agent restarting...");
       setTimeout(() => process.exit(0), 1000);
-   },
+   }
 };
 
 // ─── Web API ──────────────────────────────────────────────────────────────────
@@ -959,7 +971,6 @@ async function boot() {
 
    XrayFullConfig.start();
    JobRunner.start();
-   // ServerStats.start();
    Traffic.startXray();
    Traffic.startSsh();
    Traffic.startOvpn();
@@ -972,4 +983,4 @@ async function boot() {
 boot();
 
 process.on("unhandledRejection", (err) => console.error("[agent] unhandledRejection:", err?.stack ?? err));
-process.on("uncaughtException",  (err) => console.error("[agent] uncaughtException:",  err?.stack ?? err));
+process.on("uncaughtException", (err) => console.error("[agent] uncaughtException:", err?.stack ?? err));
