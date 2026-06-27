@@ -129,7 +129,7 @@ setInterval(() => {
    }
 }, 10 * 60 * 1000);
 
-// ─── Config Accessors (ساده‌سازی دسترسی به مقادیر پرکاربرد) ─────────────────
+// ─── Config Accessors  ─────────────────
 
 const cfg = {
    get sshEnabled() { return !!config.ssh?.enabled; },
@@ -856,7 +856,6 @@ const RemoteConfig = {
       const remote = await api.getAgentConfig();
       if (!remote) return;
 
-      // پنل می‌تواند بخش‌های agent / ssh / openvpn / xray را override کند
       if (remote.agent) {
          config.agent = {
             ...config.agent,
