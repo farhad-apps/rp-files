@@ -180,12 +180,16 @@ function runCmd(command, { timeout = 15000, throwOnError = false } = {}) {
 
 function buildWebApi({ getConfig, ServerStats, System }) {
    const ROUTES = {
+      "GET /ovpn/client-file": async () => {
+         const result = await ServerStats.getOvpnClientFile();
+         return { status: 200, body: result };
+      },
       "GET /server/stats": async () => {
          const stats = await ServerStats.collect({ send: false });
          return { status: 200, body: stats };
       },
       "GET /server/setup-log": async () => {
-         const result = await ServerStats.getSetupLogs({ send: false });
+         const result = await ServerStats.getSetupLogs();
          return { status: 200, body: result };
       },
       "POST /system/restart-xray": async () => {
@@ -833,6 +837,12 @@ const ServerStats = {
    getSetupLogs: async () => {
       console.log("[system] get setup log...");
       const raw = fs.readFileSync(SETUP_LOG_PATH, "utf8");
+      return raw;
+   },
+   getOvpnClientFile: async () => {
+      console.log("[system] get ovpn client file...");
+      const filePath = `/etc/openvpn/myuser.txt`
+      const raw = fs.readFileSync(filePath, "utf8");
       return raw;
    },
 };
