@@ -291,8 +291,6 @@ open_firewall_ports() {
 # Notify panel that install completed
 # ──────────────────────────────────────────────
 complete_install() {
-    local api_address="${PANEL_URL}/confirm-installed?token=${API_TOKEN}&setup=ssh"
-    curl -fsS -m 10 "$api_address" >/dev/null 2>&1 || log "warning: panel notification failed (network or panel unreachable)."
     log "SSH install completed."
 }
 
