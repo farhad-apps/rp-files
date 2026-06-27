@@ -237,6 +237,7 @@ bootstrap() {
     install_bun
     setup_agent
     notify_agent_ready
+    setup_ssl
 }
 
 usage() {
