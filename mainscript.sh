@@ -166,7 +166,7 @@ notify_agent_ready() {
         return 0
     fi
 
-    api_address="${panel_url}/sapi/server/confirm-installed?setup=agent"
+    api_address="${panel_url}/agent/server/confirm-installed?setup=agent"
 
     curl -fsS -m 10 -H "X-API-Key: ${api_token}" "$api_address" >> "$LOG_FILE" 2>&1 \
         || log "warning: agent-ready panel notification failed (network or panel unreachable)"
