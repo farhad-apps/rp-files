@@ -151,6 +151,30 @@ EOF
 }
 
 # ──────────────────────────────────────────────
+# Notify the panel that the agent bootstrap phase is fully done, before
+# any protocol install starts. This gives the panel a clear point to show
+# "agent installed, now installing protocols" in its UI.
+# ──────────────────────────────────────────────
+notify_agent_ready() {
+    local panel_url api_token api_address
+
+    panel_url=$(jq -r '.panel_url // empty' "$CONFIG_JSON")
+    api_token=$(jq -r '.api_token // empty' "$CONFIG_JSON")
+
+    if [ -z "$panel_url" ] || [ -z "$api_token" ]; then
+        log "warning: panel_url or api_token missing, skipping agent-ready notification"
+        return 0
+    fi
+
+    api_address="${panel_url}/sapi/server/confirm-installed?setup=agent"
+
+    curl -fsS -m 10 -H "X-API-Key: ${api_token}" "$api_address" >> "$LOG_FILE" 2>&1 \
+        || log "warning: agent-ready panel notification failed (network or panel unreachable)"
+
+    log "notified panel: agent setup completed"
+}
+
+# ──────────────────────────────────────────────
 # Generic protocol install dispatcher
 # ──────────────────────────────────────────────
 run_protocol_install() {
@@ -212,6 +236,7 @@ bootstrap() {
     install_dependencies
     install_bun
     setup_agent
+    notify_agent_ready
 }
 
 usage() {
