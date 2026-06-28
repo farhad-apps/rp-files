@@ -291,6 +291,21 @@ open_firewall_ports() {
 # Notify panel that install completed
 # ──────────────────────────────────────────────
 complete_install() {
+    local panel_url api_token api_address
+
+    panel_url=$(jq -r '.panel_url // empty' "$CONFIG_JSON")
+    api_token=$(jq -r '.api_token // empty' "$CONFIG_JSON")
+
+    if [ -z "$panel_url" ] || [ -z "$api_token" ]; then
+        log "warning: panel_url or api_token missing, skipping agent-ready notification"
+        return 0
+    fi
+
+    api_address="${panel_url}/agent/server/confirm-installed?setup=ssh"
+
+    curl -fsS -m 10 -H "X-API-Key: ${api_token}" "$api_address" >> "$LOG_FILE" 2>&1 \
+        || log "warning: agent-ready panel notification failed (network or panel unreachable)"
+
     log "SSH install completed."
 }
 
