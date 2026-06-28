@@ -246,7 +246,6 @@ config_pam_auth() {
 # Configure sshd (port)
 # ──────────────────────────────────────────────
 config_sshd() {
-    # rebuild rocket_sshd_config from scratch (safe overwrite)
     cat > "$ROCKET_SSHD_FILE" << EOF
 # This file is generated automatically by install-ssh.sh.
 # Manual changes will be lost on the next run.
@@ -260,10 +259,20 @@ EOF
         log "Include line added to sshd_config."
     fi
 
-    # comment out default Port 22 if present (port now comes from rocket_sshd_config)
-    sed -i -E 's/^#?\s*Port 22\s*$/#Port 22/' "$SSHD_CONFIG" 2>/dev/null || true
+    # If port is not 22, ensure port 22 remains active (uncommented) in sshd_config
+    if [ "$SSH_PORT" != "22" ]; then
+        if grep -qE "^#?\s*Port 22\s*$" "$SSHD_CONFIG"; then
+            sed -i -E 's/^#?\s*Port 22\s*$/Port 22/' "$SSHD_CONFIG"
+            log "Port 22 ensured active in sshd_config."
+        else
+            echo "Port 22" >> "$SSHD_CONFIG"
+            log "Port 22 added to sshd_config."
+        fi
+    else
+        # Port is 22 — comment it out since rocket_sshd_config handles it
+        sed -i -E 's/^#?\s*Port 22\s*$/#Port 22/' "$SSHD_CONFIG" 2>/dev/null || true
+    fi
 
-    # validate config before restarting
     if sshd -t 2>/tmp/sshd_test_err; then
         systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
         log "sshd restarted successfully on port ${SSH_PORT}."
