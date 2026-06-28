@@ -239,6 +239,7 @@ EOF
 # Notify panel that install completed
 # ──────────────────────────────────────────────
 complete_install() {
+    systemctl restart rocket-agent
     log "SSL install completed."
 }
 
