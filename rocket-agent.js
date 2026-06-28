@@ -40,6 +40,7 @@ class APIError extends AgentError {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const CONFIG_PATH = `${__dirname}/config.json`;
+const INSTALLER_PATH = `${__dirname}/installer`;
 const SETUP_LOG_PATH = `${__dirname}/mainscript.log`;
 
 const DEFAULTS = {
@@ -132,26 +133,56 @@ setInterval(() => {
 // ─── Config Accessors  ─────────────────
 
 const cfg = {
-   get sshEnabled() { return !!config.ssh?.enabled; },
-   get ovpnEnabled() { return !!config.openvpn?.enabled; },
-   get xrayEnabled() { return !!config.xray?.enabled; },
-   get sshTrafficEnabled() { return !!config.ssh?.features?.traffic; },
+   get sshEnabled() {
+      return !!config.ssh?.enabled;
+   },
+   get ovpnEnabled() {
+      return !!config.openvpn?.enabled;
+   },
+   get xrayEnabled() {
+      return !!config.xray?.enabled;
+   },
+   get sshTrafficEnabled() {
+      return !!config.ssh?.features?.traffic;
+   },
 
-   get maxJobs() { return config.agent?.max_jobs ?? 5; },
+   get maxJobs() {
+      return config.agent?.max_jobs ?? 5;
+   },
 
-   get jobsInterval() { return config.agent?.intervals?.jobs ?? 5000; },
-   get statsInterval() { return config.agent?.intervals?.stats ?? 60000; },
-   get remoteConfigInterval() { return config.agent?.intervals?.config ?? 60000; },
-   get xrayConfigInterval() { return config.xray?.intervals?.config ?? 300000; },
+   get jobsInterval() {
+      return config.agent?.intervals?.jobs ?? 5000;
+   },
+   get statsInterval() {
+      return config.agent?.intervals?.stats ?? 60000;
+   },
+   get remoteConfigInterval() {
+      return config.agent?.intervals?.config ?? 60000;
+   },
+   get xrayConfigInterval() {
+      return config.xray?.intervals?.config ?? 300000;
+   },
 
-   get sshTrafficInterval() { return config.ssh?.intervals?.traffic ?? 60000; },
-   get ovpnTrafficInterval() { return config.openvpn?.intervals?.traffic ?? 60000; },
-   get xrayTrafficInterval() { return config.xray?.intervals?.traffic ?? 30000; },
+   get sshTrafficInterval() {
+      return config.ssh?.intervals?.traffic ?? 60000;
+   },
+   get ovpnTrafficInterval() {
+      return config.openvpn?.intervals?.traffic ?? 60000;
+   },
+   get xrayTrafficInterval() {
+      return config.xray?.intervals?.traffic ?? 30000;
+   },
 
-   get sshOnlineInterval() { return config.ssh?.intervals?.online ?? 60000; },
-   get ovpnOnlineInterval() { return config.openvpn?.intervals?.online ?? 60000; },
+   get sshOnlineInterval() {
+      return config.ssh?.intervals?.online ?? 60000;
+   },
+   get ovpnOnlineInterval() {
+      return config.openvpn?.intervals?.online ?? 60000;
+   },
 
-   get apiConfig() { return config.agent?.api ?? {}; },
+   get apiConfig() {
+      return config.agent?.api ?? {};
+   },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,34 +209,54 @@ function runCmd(command, { timeout = 15000, throwOnError = false } = {}) {
 
 // ─── buildWebApi ──────────────────────────────────────────────────────────────
 
-function buildWebApi({ getConfig, ServerStats, System }) {
+function buildWebApi({ getConfig, ServerApi }) {
+   function parseBody(req) {
+      return new Promise((resolve, reject) => {
+         let data = "";
+         req.on("data", (chunk) => (data += chunk));
+         req.on("end", () => {
+            try {
+               resolve(data ? JSON.parse(data) : {});
+            } catch {
+               resolve({});
+            }
+         });
+         req.on("error", reject);
+      });
+   }
+
    const ROUTES = {
-      "GET /ovpn/client-file": async () => {
-         const result = await ServerStats.getOvpnClientFile();
-         return { status: 200, body: result };
+      "GET /api/ovpn/client-file": async () => {
+         const result = await ServerApi.getOvpnClientFile();
+         return { status: 200, body: { file: result } };
       },
-      "GET /server/stats": async () => {
-         const stats = await ServerStats.collect({ send: false });
+      "GET /api/server/stats": async () => {
+         const stats = await ServerApi.getStats();
          return { status: 200, body: stats };
       },
-      "GET /server/setup-log": async () => {
-         const result = await ServerStats.getSetupLogs();
-         return { status: 200, body: result };
+      "GET /api/server/setup-log": async () => {
+         const result = await ServerApi.getSetupLogs();
+         return { status: 200, body: { logs: result } };
       },
-      "POST /system/restart-xray": async () => {
-         await System.restartXray();
+      "POST /api/system/restart-xray": async () => {
+         await ServerApi.restartXray();
          return { status: 200, body: { ok: true } };
       },
-      "POST /system/restart-ssh": async () => {
-         await System.restartSsh();
+      "POST /api/system/restart-ssh": async () => {
+         await ServerApi.restartSsh();
          return { status: 200, body: { ok: true } };
       },
-      "POST /system/restart-openvpn": async () => {
-         await System.restartOpenvpn();
+      "POST /api/system/restart-openvpn": async () => {
+         await ServerApi.restartOpenvpn();
          return { status: 200, body: { ok: true } };
       },
-      "POST /system/restart-agent": async () => {
-         System.restartAgent();
+      "POST /api/system/restart-agent": async () => {
+         ServerApi.restartAgent();
+         return { status: 200, body: { ok: true } };
+      },
+      "POST /api/system/setup-protocol": async (req, res, body) => {
+         const { protocol } = body;
+         ServerApi.setupProtocol(protocol);
          return { status: 200, body: { ok: true } };
       },
    };
@@ -227,8 +278,6 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 
    async function handleRequest(req, res) {
       try {
-         // CORS preflight - browsers send this before the real request and
-         // never include X-API-Key, so it must be answered before auth.
          if (req.method === "OPTIONS") {
             res.writeHead(204, {
                "Access-Control-Allow-Origin": "*",
@@ -251,8 +300,9 @@ function buildWebApi({ getConfig, ServerStats, System }) {
             return sendJson(res, 404, { error: "Not found" });
          }
 
-         const { status, body } = await handler(req, res);
-         return sendJson(res, status, body);
+         const body = await parseBody(req);
+         const { status, body: resBody } = await handler(req, res, body);
+         return sendJson(res, status, resBody);
       } catch (err) {
          console.error("[web-api] Request error:", err?.stack ?? err);
          return sendJson(res, 500, { error: err.message || "Internal error" });
@@ -263,6 +313,7 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 
    function start() {
       const apiCfg = cfg.apiConfig;
+
       const port = parseInt(apiCfg.listen, 10);
 
       if (!port) {
@@ -303,8 +354,12 @@ function buildWebApi({ getConfig, ServerStats, System }) {
 // ─── XrayCLI ──────────────────────────────────────────────────────────────────
 
 class XrayCLI {
-   get bin() { return config.xray.bin; }
-   get port() { return config.xray.port; }
+   get bin() {
+      return config.xray.bin;
+   }
+   get port() {
+      return config.xray.port;
+   }
 
    _run(command, args = null) {
       const env = { ...process.env, XRAY_API_PORT: this.port };
@@ -319,12 +374,18 @@ class XrayCLI {
             timeout: 10000,
          }).toString();
 
-         const jsonLine = output.split("\n").filter((l) => l.trim().startsWith("{")).pop();
+         const jsonLine = output
+            .split("\n")
+            .filter((l) => l.trim().startsWith("{"))
+            .pop();
          if (jsonLine) return JSON.parse(jsonLine);
          return { ok: true };
       } catch (err) {
          const raw = (err.stdout || err.stderr || "").toString();
-         const jsonLine = raw.split("\n").filter((l) => l.trim().startsWith("{")).pop();
+         const jsonLine = raw
+            .split("\n")
+            .filter((l) => l.trim().startsWith("{"))
+            .pop();
          if (jsonLine) {
             const parsed = JSON.parse(jsonLine);
             throw new XrayError(parsed.error || "Xray command failed", { command, args, response: parsed });
@@ -333,11 +394,21 @@ class XrayCLI {
       }
    }
 
-   addInbound(cfg) { return this._run("add-inbound", cfg); }
-   delInbound(tag) { return this._run("del-inbound", { tag }); }
-   addUser(protocol, tag, email, extras) { return this._run("add-user", { protocol, tag, email, ...extras }); }
-   removeUser(tag, email) { return this._run("remove-user", { tag, email }); }
-   getTraffic() { return this._run("get-traffic"); }
+   addInbound(cfg) {
+      return this._run("add-inbound", cfg);
+   }
+   delInbound(tag) {
+      return this._run("del-inbound", { tag });
+   }
+   addUser(protocol, tag, email, extras) {
+      return this._run("add-user", { protocol, tag, email, ...extras });
+   }
+   removeUser(tag, email) {
+      return this._run("remove-user", { tag, email });
+   }
+   getTraffic() {
+      return this._run("get-traffic");
+   }
 }
 
 const xrayCLI = new XrayCLI();
@@ -423,9 +494,7 @@ const api = {
 
 const SSH = {
    addUser: async ({ username, password }) => {
-      const { exitCode: e1, stderr: s1 } = await runCmd(
-         `sudo adduser ${username} --force-badname --shell /usr/sbin/nologin --disabled-password --gecos ""`
-      );
+      const { exitCode: e1, stderr: s1 } = await runCmd(`sudo adduser ${username} --force-badname --shell /usr/sbin/nologin --disabled-password --gecos ""`);
       if (e1 !== 0) throw new SSHError(`adduser failed for ${username}: ${s1}`, { username });
 
       const { exitCode: e2, stderr: s2 } = await SSH._setPassword(username, password);
@@ -528,7 +597,9 @@ const FullSync = {
 
       for (const inbound of data.inbounds ?? []) {
          try {
-            try { xrayCLI.delInbound(inbound.tag); } catch { }
+            try {
+               xrayCLI.delInbound(inbound.tag);
+            } catch {}
             xrayCLI.addInbound(inbound);
             results.inbounds++;
          } catch (err) {
@@ -577,16 +648,14 @@ const ACTION_MAP = {
    remove_ssh_user: (p) => SSH.removeUser(p),
    update_ssh_user: (p) => SSH.updateUser(p),
    sync_server: () => FullSync.run(),
-   restart_xray: () => System.restartXray(),
-   restart_ssh: () => System.restartSsh(),
-   restart_openvpn: () => System.restartOpenvpn(),
-   restart_agent: () => System.restartAgent(),
 };
 
 const JobRunner = {
    busy: false,
 
-   get CONCURRENCY() { return cfg.maxJobs; },
+   get CONCURRENCY() {
+      return cfg.maxJobs;
+   },
 
    start() {
       setInterval(() => JobRunner.poll(), cfg.jobsInterval);
@@ -717,9 +786,7 @@ const Online = {
       const run = async () => {
          if (cfg.sshEnabled) {
             try {
-               const { stdout } = await runCmd(
-                  "ps aux | grep -E 'sshd|stunnel' | grep -v grep | awk '{print $1}' | sort -u"
-               );
+               const { stdout } = await runCmd("ps aux | grep -E 'sshd|stunnel' | grep -v grep | awk '{print $1}' | sort -u");
                const users = stdout.split("\n").filter((u) => u && u !== "root");
                if (users.length) await api.sendSshOnline(users);
             } catch (err) {
@@ -767,13 +834,13 @@ const Online = {
    },
 };
 
-// ─── ServerStats ──────────────────────────────────────────────────────────────
+// ─── ServerApi ──────────────────────────────────────────────────────────────
 
-const ServerStats = {
+const ServerApi = {
    start() {
       const run = async () => {
          try {
-            await ServerStats.collect();
+            await ServerApi.collect();
          } catch (err) {
             console.error("[stats]", err.message);
          }
@@ -782,7 +849,7 @@ const ServerStats = {
       run();
    },
 
-   async collect({ send = true } = {}) {
+   async getStats() {
       const [cpuUsage, cpuInfo, ram, disk, net, loadAvg, uptime, os, kernel] = await Promise.all([
          runCmd("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'"),
          runCmd("lscpu | grep -E 'Model name|^CPU\\(s\\)|CPU MHz'"),
@@ -797,11 +864,20 @@ const ServerStats = {
 
       const cpuLines = cpuInfo.stdout.split("\n");
       const cpuModel =
-         cpuLines.find((l) => l.includes("Model name"))?.split(":")[1]?.trim() ?? "";
+         cpuLines
+            .find((l) => l.includes("Model name"))
+            ?.split(":")[1]
+            ?.trim() ?? "";
       const cpuCores =
-         cpuLines.find((l) => l.includes("CPU(s)"))?.split(":")[1]?.trim() ?? "0";
+         cpuLines
+            .find((l) => l.includes("CPU(s)"))
+            ?.split(":")[1]
+            ?.trim() ?? "0";
       const cpuMhz =
-         cpuLines.find((l) => l.includes("CPU MHz"))?.split(":")[1]?.trim() ?? "0";
+         cpuLines
+            .find((l) => l.includes("CPU MHz"))
+            ?.split(":")[1]
+            ?.trim() ?? "0";
 
       const [ramTotal, ramUsed, ramFree] = ram.stdout.split(" ").map(Number);
       const [diskTotal, diskUsed, diskFree] = disk.stdout.split(" ");
@@ -826,12 +902,13 @@ const ServerStats = {
          kernel: kernel.stdout.trim(),
       };
 
-      if (send) {
-         await api.sendServerStats(stats);
-         console.log("[stats] Sent");
-      }
-
       return stats;
+   },
+
+   async setupProtocol(protocol) {
+      console.log("[server api] setup protocol...");
+      await runCmd(`rm ${SETUP_LOG_PATH}`);
+      await runCmd(`${INSTALLER_PATH} setup-${protocol}`);
    },
 
    getSetupLogs: async () => {
@@ -839,11 +916,35 @@ const ServerStats = {
       const raw = fs.readFileSync(SETUP_LOG_PATH, "utf8");
       return raw;
    },
+
    getOvpnClientFile: async () => {
       console.log("[system] get ovpn client file...");
-      const filePath = `/etc/openvpn/myuser.txt`
+      const filePath = `/etc/openvpn/myuser.txt`;
       const raw = fs.readFileSync(filePath, "utf8");
       return raw;
+   },
+
+   restartXray: async () => {
+      const { exitCode, stderr } = await runCmd("sudo systemctl restart rxray");
+      if (exitCode !== 0) throw new AgentError(`restart xray failed: ${stderr}`, "SYSTEM_ERROR");
+      console.log("[system] Xray restarted");
+   },
+
+   restartSsh: async () => {
+      const { exitCode, stderr } = await runCmd("sudo systemctl restart ssh sshd 2>/dev/null; true");
+      if (exitCode !== 0) throw new AgentError(`restart ssh failed: ${stderr}`, "SYSTEM_ERROR");
+      console.log("[system] SSH restarted");
+   },
+
+   restartOpenvpn: async () => {
+      const { exitCode, stderr } = await runCmd("sudo systemctl restart openvpn");
+      if (exitCode !== 0) throw new AgentError(`restart openvpn failed: ${stderr}`, "SYSTEM_ERROR");
+      console.log("[system] OpenVPN restarted");
+   },
+
+   restartAgent: async () => {
+      console.log("[system] Agent restarting...");
+      setTimeout(() => process.exit(0), 1000);
    },
 };
 
@@ -897,11 +998,14 @@ const RemoteConfig = {
          };
       }
 
-      console.log("[remote-config] Updated:", JSON.stringify({
-         ssh: { enabled: cfg.sshEnabled, traffic: cfg.sshTrafficEnabled },
-         openvpn: { enabled: cfg.ovpnEnabled },
-         xray: { enabled: cfg.xrayEnabled },
-      }));
+      console.log(
+         "[remote-config] Updated:",
+         JSON.stringify({
+            ssh: { enabled: cfg.sshEnabled, traffic: cfg.sshTrafficEnabled },
+            openvpn: { enabled: cfg.ovpnEnabled },
+            xray: { enabled: cfg.xrayEnabled },
+         })
+      );
    },
 };
 
@@ -931,39 +1035,11 @@ const XrayFullConfig = {
    },
 };
 
-// ─── System ───────────────────────────────────────────────────────────────────
-
-const System = {
-   restartXray: async () => {
-      const { exitCode, stderr } = await runCmd("sudo systemctl restart rxray");
-      if (exitCode !== 0) throw new AgentError(`restart xray failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] Xray restarted");
-   },
-
-   restartSsh: async () => {
-      const { exitCode, stderr } = await runCmd("sudo systemctl restart ssh sshd 2>/dev/null; true");
-      if (exitCode !== 0) throw new AgentError(`restart ssh failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] SSH restarted");
-   },
-
-   restartOpenvpn: async () => {
-      const { exitCode, stderr } = await runCmd("sudo systemctl restart openvpn");
-      if (exitCode !== 0) throw new AgentError(`restart openvpn failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] OpenVPN restarted");
-   },
-
-   restartAgent: async () => {
-      console.log("[system] Agent restarting...");
-      setTimeout(() => process.exit(0), 1000);
-   }
-};
-
 // ─── Web API ──────────────────────────────────────────────────────────────────
 
 const webApi = buildWebApi({
    getConfig: () => config,
-   ServerStats,
-   System,
+   ServerApi,
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
