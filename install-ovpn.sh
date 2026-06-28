@@ -334,9 +334,8 @@ complete_install() {
 
     api_address="${panel_url}/agent/server/confirm-installed?setup=openvpn"
 
-    curl -fsS -m 10 -H "X-API-Key: ${api_token}" "$api_address" >> "$LOG_FILE" 2>&1 \
-        || log "warning: agent-ready panel notification failed (network or panel unreachable)"
-
+    curl -fsS -m 10 -H "X-API-Key: ${api_token}" "$api_address" > /dev/null 2>&1
+    
     log "OpenVPN install completed."
 }
 
