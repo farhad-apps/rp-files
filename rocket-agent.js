@@ -42,6 +42,7 @@ class APIError extends AgentError {
 const CONFIG_PATH = `${__dirname}/config.json`;
 const INSTALLER_PATH = `${__dirname}/installer`;
 const SETUP_LOG_PATH = `${__dirname}/mainscript.log`;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const DEFAULTS = {
    agent: {
@@ -597,6 +598,7 @@ const FullSync = {
       if (cfg.xrayEnabled && data.xray_config) {
          const { xray_config } = data;
          fs.writeFileSync(config.xray.config_path, JSON.stringify(xray_config, null, 2), "utf8");
+         await sleep(5000)
          await runCmd("sudo systemctl restart rxray");
       }
 
@@ -893,6 +895,9 @@ const ServerApi = {
 
    async setupProtocol(protocol) {
       console.log("[server api] setup protocol...");
+      if (protocol === "openvpn") {
+         protocol = "ovpn";
+      }
       await runCmd(`rm ${SETUP_LOG_PATH}`);
       await runCmd(`${INSTALLER_PATH} setup-${protocol}`);
    },
@@ -961,6 +966,7 @@ const RemoteConfig = {
             api: { ...config.agent.api, ...(remote.agent?.api ?? {}) },
          };
       }
+
       if (remote.ssh) {
          config.ssh = {
             ...config.ssh,
@@ -969,6 +975,7 @@ const RemoteConfig = {
             intervals: { ...config.ssh.intervals, ...(remote.ssh?.intervals ?? {}) },
          };
       }
+
       if (remote.openvpn) {
          config.openvpn = {
             ...config.openvpn,
@@ -976,6 +983,7 @@ const RemoteConfig = {
             intervals: { ...config.openvpn.intervals, ...(remote.openvpn?.intervals ?? {}) },
          };
       }
+      
       if (remote.xray) {
          config.xray = {
             ...config.xray,
@@ -984,6 +992,13 @@ const RemoteConfig = {
          };
       }
 
+      try {
+         fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
+         console.log("[remote-config] Config saved to file");
+      } catch (err) {
+         console.error("[remote-config] Failed to save config:", err.message);
+      }
+   
       console.log(
          "[remote-config] Updated:",
          JSON.stringify({
