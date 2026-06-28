@@ -261,19 +261,15 @@ main() {
 
     case "$cmd" in
         setup-ssh)
-            bootstrap
             setup_ssh
             ;;
         setup-xray)
-            bootstrap
             setup_xray
             ;;
         setup-ovpn)
-            bootstrap
             setup_ovpn
             ;;
         setup-ssl)
-            bootstrap
             setup_ssl
             ;;
         setup-all)
