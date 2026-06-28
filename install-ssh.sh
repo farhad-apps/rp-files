@@ -259,17 +259,17 @@ EOF
         log "Include line added to sshd_config."
     fi
 
-    # If port is not 22, ensure port 22 remains active (uncommented) in sshd_config
+    # Remove any previously written Port 22 line by this script
+    sed -i '/^# managed by install-ssh\.sh$/,/^# end managed$/d' "$SSHD_CONFIG"
+
     if [ "$SSH_PORT" != "22" ]; then
+        # Ensure port 22 stays active via a managed block
         if grep -qE "^#?\s*Port 22\s*$" "$SSHD_CONFIG"; then
-            sed -i -E 's/^#?\s*Port 22\s*$/Port 22/' "$SSHD_CONFIG"
-            log "Port 22 ensured active in sshd_config."
-        else
-            echo "Port 22" >> "$SSHD_CONFIG"
-            log "Port 22 added to sshd_config."
+            sed -i -E 's/^#?\s*Port 22\s*$/#Port 22/' "$SSHD_CONFIG"
         fi
+        printf '\n# managed by install-ssh.sh\nPort 22\n# end managed\n' >> "$SSHD_CONFIG"
+        log "Port 22 ensured active in sshd_config."
     else
-        # Port is 22 — comment it out since rocket_sshd_config handles it
         sed -i -E 's/^#?\s*Port 22\s*$/#Port 22/' "$SSHD_CONFIG" 2>/dev/null || true
     fi
 
@@ -285,7 +285,6 @@ EOF
 
     rm -f /tmp/sshd_test_err
 }
-
 # ──────────────────────────────────────────────
 # Firewall - open required ports
 # ──────────────────────────────────────────────
