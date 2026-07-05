@@ -274,8 +274,21 @@ EOF
     fi
 
     if sshd -t 2>/tmp/sshd_test_err; then
-        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
-        log "sshd restarted successfully on port ${SSH_PORT}."
+        systemctl daemon-reload
+
+        # If ssh.socket is active (socket-activated sshd, e.g. Ubuntu 22.04+),
+        # restarting only ssh.service is not enough: the generator drop-in
+        # (/run/systemd/generator/ssh.socket.d/addresses.conf) only gets
+        # regenerated on daemon-reload, and the socket unit itself needs a
+        # restart to actually re-bind with the new port list. Restarting
+        # ssh.socket also brings ssh.service back up via socket activation.
+        if systemctl is-active --quiet ssh.socket; then
+            systemctl restart ssh.socket
+            log "ssh.socket restarted (socket-activated sshd) on port ${SSH_PORT}."
+        else
+            systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+            log "sshd restarted successfully on port ${SSH_PORT}."
+        fi
     else
         err "sshd config is invalid:"
         cat /tmp/sshd_test_err >&2
