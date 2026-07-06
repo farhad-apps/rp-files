@@ -703,14 +703,14 @@ const Traffic = {
             if (cfg.sshEnabled && cfg.sshTrafficEnabled) {
                 try {
                     const intervalSec = Math.max(2, Math.floor(cfg.sshTrafficInterval / 1000) - 3);
-    
+
                     const { stdout, exitCode } = await runCmd(
                         `sudo nethogs -j -v3 -d ${intervalSec} -c 1`,
-                        { timeout: cfg.sshTrafficInterval } 
+                        { timeout: cfg.sshTrafficInterval }
                     );
-    
-                    await runCmd("sudo pkill nethogs").catch(() => {});
-    
+
+                    await runCmd("sudo pkill nethogs").catch(() => { });
+
                     if (exitCode === 0 && stdout) {
                         const lines = stdout.split("\n").filter((l) => l.trim().startsWith("["));
                         if (lines.length) {
