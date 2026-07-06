@@ -702,9 +702,15 @@ const Traffic = {
         const run = async () => {
             if (cfg.sshEnabled && cfg.sshTrafficEnabled) {
                 try {
-                    const { stdout, exitCode } = await runCmd("sudo nethogs -j -v3 -c2", { timeout: 30000 });
-                    await runCmd("sudo pkill nethogs");
-
+                    const intervalSec = Math.max(2, Math.floor(cfg.sshTrafficInterval / 1000) - 3);
+    
+                    const { stdout, exitCode } = await runCmd(
+                        `sudo nethogs -j -v3 -d ${intervalSec} -c 1`,
+                        { timeout: cfg.sshTrafficInterval } 
+                    );
+    
+                    await runCmd("sudo pkill nethogs").catch(() => {});
+    
                     if (exitCode === 0 && stdout) {
                         const lines = stdout.split("\n").filter((l) => l.trim().startsWith("["));
                         if (lines.length) {
@@ -727,7 +733,6 @@ const Traffic = {
         };
         run();
     },
-
     startOvpn() {
         const run = async () => {
             if (cfg.ovpnEnabled) {
