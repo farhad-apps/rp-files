@@ -3,6 +3,7 @@ const https = require("https");
 const { execSync, exec } = require("child_process");
 const fs = require("fs");
 const { Buffer } = require("buffer");
+const { spawn } = require("child_process");
 
 // ─── Custom Errors ────────────────────────────────────────────────────────────
 
@@ -491,96 +492,6 @@ const api = {
    sendOvpnOnline: (clients) => request("POST", "agent/online/openvpn", { clients }),
 };
 
-// ─── Nft (SSH traffic accounting) ──────────────────────────────────────────
-
-const NFT_TABLE = "acct";
-const NFT_COMMENT_PREFIX = "user_";
-
-const Nft = {
-   async ensureSetup() {
-      await runCmd(`sudo nft add table inet ${NFT_TABLE} 2>/dev/null; true`);
-      await runCmd(`sudo nft add chain inet ${NFT_TABLE} output '{ type filter hook output priority 0; policy accept; }' 2>/dev/null; true`);
-      await runCmd(`sudo nft add chain inet ${NFT_TABLE} input  '{ type filter hook input priority 0; policy accept; }' 2>/dev/null; true`);
-      console.log("[nft] acct table ready");
-   },
-
-   async addUserCounters(username) {
-      const { stdout: uidOut, exitCode } = await runCmd(`id -u ${username}`);
-      if (exitCode !== 0) throw new AgentError(`nft: could not resolve uid for ${username}`, "NFT_ERROR", { username });
-      const uid = uidOut.trim();
-      const comment = `${NFT_COMMENT_PREFIX}${username}`;
-
-      const existing = await Nft._findRules(comment);
-      if (existing.length) return; // از قبل داره، دوباره اضافه نکن
-
-      await runCmd(`sudo nft add rule inet ${NFT_TABLE} output meta skuid ${uid} counter comment \\"${comment}\\"`);
-      await runCmd(`sudo nft add rule inet ${NFT_TABLE} input  meta skuid ${uid} counter comment \\"${comment}\\"`);
-      console.log(`[nft] Counters added: ${username} (uid ${uid})`);
-   },
-
-   async removeUserCounters(username) {
-      const comment = `${NFT_COMMENT_PREFIX}${username}`;
-      const rules = await Nft._findRules(comment);
-      for (const rule of rules) {
-         await runCmd(`sudo nft delete rule inet ${NFT_TABLE} ${rule.chain} handle ${rule.handle}`);
-      }
-      console.log(`[nft] Counters removed: ${username} (${rules.length} rules)`);
-   },
-
-   async _findRules(comment) {
-      const { stdout, exitCode } = await runCmd(`sudo nft -j list table inet ${NFT_TABLE}`);
-      if (exitCode !== 0) return [];
-      let data;
-      try {
-         data = JSON.parse(stdout);
-      } catch {
-         return [];
-      }
-      const rules = [];
-      for (const item of data.nftables || []) {
-         if (item.rule?.comment === comment) rules.push(item.rule);
-      }
-      return rules;
-   },
-
-   async readCounters() {
-      const { stdout, exitCode, stderr } = await runCmd(`sudo nft -j list table inet ${NFT_TABLE}`);
-      if (exitCode !== 0) throw new AgentError(`nft list failed: ${stderr}`, "NFT_ERROR");
-
-      const data = JSON.parse(stdout);
-      const counters = {}; // { username: { rx, tx } }
-
-      for (const item of data.nftables || []) {
-         const rule = item.rule;
-         if (!rule?.comment?.startsWith(NFT_COMMENT_PREFIX)) continue;
-
-         const username = rule.comment.slice(NFT_COMMENT_PREFIX.length);
-         const counterExpr = (rule.expr || []).find((e) => e.counter);
-         const bytes = counterExpr ? counterExpr.counter.bytes : 0;
-
-         if (!counters[username]) counters[username] = { rx: 0, tx: 0 };
-         if (rule.chain === "output") counters[username].tx = bytes; // ارسالی
-         if (rule.chain === "input") counters[username].rx = bytes; // دریافتی
-      }
-
-      return counters;
-   },
-
-   // برای backfill کاربرهای nologin موجود قبل از نصب این نسخه
-   async syncAllUsers() {
-      const { stdout } = await runCmd(`awk -F: '$7 ~ /nologin/ {print $1}' /etc/passwd`);
-      const users = stdout.split("\n").filter(Boolean);
-      for (const username of users) {
-         try {
-            await Nft.addUserCounters(username);
-         } catch (err) {
-            console.warn(`[nft] sync failed for ${username}:`, err.message);
-         }
-      }
-      console.log(`[nft] Synced counters for ${users.length} existing users`);
-   },
-};
-
 // ─── SSH Actions ──────────────────────────────────────────────────────────────
 
 const SSH = {
@@ -594,24 +505,12 @@ const SSH = {
       const { exitCode: e3, stderr: s3 } = await runCmd(`sudo adduser ${username} rocket`);
       if (e3 !== 0) throw new SSHError(`adduser to group failed for ${username}: ${s3}`, { username });
 
-      try {
-         await Nft.addUserCounters(username);
-      } catch (err) {
-         console.warn(`[nft] Failed to add counters for ${username} (user still created):`, err.message);
-      }
-
       console.log(`[ssh] User added: ${username}`);
    },
 
    removeUser: async ({ username }) => {
       await runCmd(`sudo killall -u ${username} 2>/dev/null; true`);
       await runCmd(`sudo pkill -u ${username} 2>/dev/null; true`);
-
-      try {
-         await Nft.removeUserCounters(username);
-      } catch (err) {
-         console.warn(`[nft] Failed to remove counters for ${username}:`, err.message);
-      }
 
       const { exitCode, stderr } = await runCmd(`sudo userdel -r ${username}`);
       if (exitCode !== 0 && !stderr.includes("does not exist")) {
@@ -801,26 +700,74 @@ const JobRunner = {
 
 const Traffic = {
    startSsh() {
-      let lastValues = new Map(); // key: username, value: { rx, tx }
+      let nethogsProc = null;
+      let lastValues = new Map(); // key: PID, value: { rx, tx }
+      let latestLine = null;
+      let buffer = "";
+
+      const spawnNethogs = () => {
+         if (nethogsProc) return; // already running
+
+         nethogsProc = spawn("sudo", ["nice", "-n", "10", "ionice", "-c2", "-n7", "nethogs", "-j", "-v2", "-d", "60", cfg.sshInterface || "eth0"]);
+
+         nethogsProc.stdout.on("data", (chunk) => {
+            buffer += chunk.toString();
+            const parts = buffer.split("\n");
+            buffer = parts.pop(); // keep incomplete last line
+            for (const line of parts) {
+               const trimmed = line.trim();
+               if (trimmed.startsWith("[")) {
+                  latestLine = trimmed;
+               }
+            }
+         });
+
+         nethogsProc.stderr.on("data", () => {}); // suppress "Adding local address" etc.
+
+         nethogsProc.on("exit", (code) => {
+            console.error("[nethogs] exited with code", code, "- restarting in 3s");
+            nethogsProc = null;
+            latestLine = null;
+            lastValues.clear(); // reset deltas since counters will restart from 0
+            setTimeout(spawnNethogs, 3000);
+         });
+
+         nethogsProc.on("error", (err) => {
+            console.error("[nethogs] failed to start:", err.message);
+            nethogsProc = null;
+         });
+      };
 
       const run = async () => {
          if (cfg.sshEnabled && cfg.sshTrafficEnabled) {
             try {
-               const counters = await Nft.readCounters();
-               const clients = Object.entries(counters)
-                  .map(([username, { rx, tx }]) => {
-                     const prev = lastValues.get(username) || { rx: 0, tx: 0 };
-                     // اگه کانتر کمتر از قبل بود یعنی نفتیبلز ری‌استارت شده -> از صفر حساب کن
-                     const deltaRx = rx >= prev.rx ? rx - prev.rx : rx;
-                     const deltaTx = tx >= prev.tx ? tx - prev.tx : tx;
-                     lastValues.set(username, { rx, tx });
-                     return { username, rx: deltaRx, tx: deltaTx };
-                  })
-                  .filter((c) => c.rx > 0 || c.tx > 0);
+               if (!nethogsProc) spawnNethogs();
 
-               if (clients.length) {
-                  console.log("clients", clients);
-                  await api.sendSshTraffic(clients);
+               if (latestLine) {
+                  const parsed = JSON.parse(latestLine);
+                  const activePids = new Set(parsed.map((c) => c.PID));
+
+                  const clients = parsed
+                     .filter((c) => c.UID > 0 && c.name.startsWith("sshd-session:"))
+                     .map((c) => {
+                        const prev = lastValues.get(c.PID) || { rx: 0, tx: 0 };
+                        const deltaRx = Math.max(0, c.RX - prev.rx);
+                        const deltaTx = Math.max(0, c.TX - prev.tx);
+                        lastValues.set(c.PID, { rx: c.RX, tx: c.TX });
+                        return {
+                           username: c.name.replace("sshd-session:", "").split("@")[0].trim(),
+                           rx: deltaRx,
+                           tx: deltaTx,
+                        };
+                     })
+                     .filter((c) => c.rx > 0 || c.tx > 0);
+
+                  // پاکسازی PID‌های session‌های بسته‌شده تا Map بی‌نهایت بزرگ نشه
+                  for (const pid of lastValues.keys()) {
+                     if (!activePids.has(pid)) lastValues.delete(pid);
+                  }
+
+                  if (clients.length) await api.sendSshTraffic(clients);
                }
             } catch (err) {
                console.error("[traffic:ssh]", err.message);
