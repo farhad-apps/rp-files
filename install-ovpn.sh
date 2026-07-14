@@ -27,6 +27,12 @@ CLIENT_GENERATOR_URL="${RP_FILES_BASE}/gen-client-conf.sh"
 UNIFIED_SESSION_URL="https://raw.githubusercontent.com/farhad-apps/rp-files/main/unified-session.sh"
 UNIFIED_SESSION_PATH="/usr/local/bin/unified-session.sh"
 
+# OpenVPN drops privileges to this user/group (see `user`/`group` in server.conf).
+# client-connect / client-disconnect / auth-user-pass-verify scripts run as this
+# user, so anything they need to read/write must be accessible to it.
+OVPN_RUN_USER="nobody"
+OVPN_RUN_GROUP="nogroup"
+
 LOG_PREFIX="[install-ovpn]"
 
 log() {
@@ -144,6 +150,29 @@ build_certificates() {
 }
 
 # ──────────────────────────────────────────────
+# Grant the OpenVPN runtime user (nobody:nogroup) access to config.json
+# and the unified-session log file. OpenVPN drops privileges to this
+# user/group when it invokes client-connect / client-disconnect /
+# auth-user-pass-verify, so both files must be readable/writable by it.
+# ──────────────────────────────────────────────
+fix_unified_session_permissions() {
+    log "adjusting permissions for ${OVPN_RUN_USER}:${OVPN_RUN_GROUP} access..."
+
+    if [ -f "$CONFIG_JSON" ]; then
+        chown root:"${OVPN_RUN_GROUP}" "$CONFIG_JSON"
+        chmod 640 "$CONFIG_JSON"
+    else
+        log "warning: ${CONFIG_JSON} not found, skipping permission fix for it."
+    fi
+
+    touch /var/log/unified-session.log
+    chown "${OVPN_RUN_USER}:${OVPN_RUN_GROUP}" /var/log/unified-session.log
+    chmod 640 /var/log/unified-session.log
+
+    log "permissions fixed (config.json=640 root:${OVPN_RUN_GROUP}, log=640 ${OVPN_RUN_USER}:${OVPN_RUN_GROUP})."
+}
+
+# ──────────────────────────────────────────────
 # Download and configure unified-session.sh (same one used by SSH)
 # ──────────────────────────────────────────────
 setup_unified_session() {
@@ -164,8 +193,7 @@ setup_unified_session() {
 
     chmod 755 "$UNIFIED_SESSION_PATH"
 
-    touch /var/log/unified-session.log
-    chmod 644 /var/log/unified-session.log
+    fix_unified_session_permissions
 
     log "unified-session.sh installed and configured at ${UNIFIED_SESSION_PATH}."
 }
