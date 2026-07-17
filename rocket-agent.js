@@ -5,6 +5,18 @@ const fs = require("fs");
 const { Buffer } = require("buffer");
 const { spawn } = require("child_process");
 
+// ─── Logger ───────────────────────────────────────────────────────────────────
+// فرمت خروجی: [LEVEL] [tag] پیام
+// LEVEL یکی از: INFO, SUCCESS, WARN, ERROR
+// این فرمت طوری طراحی شده که هم روی کنسول/journalctl خوانا باشه، هم سمت پنل
+// با یه regex ساده (/^\[(\w+)\]\s*\[([\w:.-]+)\]\s*(.*)$/) قابل parse باشه.
+
+function log(level, tag, message) {
+   const line = `[${level.toUpperCase()}] [${tag}] ${message}`;
+   if (level === "error") console.error(line);
+   else console.log(line);
+}
+
 // ─── Custom Errors ────────────────────────────────────────────────────────────
 
 class AgentError extends Error {
@@ -43,6 +55,7 @@ class APIError extends AgentError {
 const CONFIG_PATH = `${__dirname}/config.json`;
 const INSTALLER_PATH = `${__dirname}/installer`;
 const SETUP_LOG_PATH = `${__dirname}/mainscript.log`;
+const SERVICE_NAME = "rocket-agent"; // اسم سرویس systemd برای خوندن لاگ‌ها
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const DEFAULTS = {
@@ -126,9 +139,9 @@ let config = loadConfig();
 setInterval(() => {
    try {
       config = loadConfig();
-      console.log("[config] Reloaded");
+      log("success", "config", "Reloaded");
    } catch (err) {
-      console.error("[config] Reload failed, keeping old config:", err.message);
+      log("error", "config", `Reload failed, keeping old config: ${err.message}`);
    }
 }, 10 * 60 * 1000);
 
@@ -209,6 +222,20 @@ function runCmd(command, { timeout = 15000, throwOnError = false } = {}) {
    });
 }
 
+// یه خط JSON خام از «journalctl -o json» رو به فرمت ساختارمند لاگ تبدیل می‌کنه
+function parseJournalEntry(entry) {
+   const message = entry.MESSAGE ?? "";
+   const timestampMs = entry.__REALTIME_TIMESTAMP ? Math.floor(Number(entry.__REALTIME_TIMESTAMP) / 1000) : Date.now();
+   const timestamp = new Date(timestampMs).toISOString();
+
+   const match = message.match(/^\[(\w+)\]\s*\[([\w:.-]+)\]\s*(.*)$/);
+   if (match) {
+      const [, level, tag, msg] = match;
+      return { timestamp, level: level.toLowerCase(), tag, message: msg };
+   }
+   return { timestamp, level: "unknown", tag: "", message };
+}
+
 // ─── buildWebApi ──────────────────────────────────────────────────────────────
 
 function buildWebApi({ getConfig, ServerApi }) {
@@ -239,6 +266,12 @@ function buildWebApi({ getConfig, ServerApi }) {
       "GET /api/server/setup-log": async () => {
          const result = await ServerApi.getSetupLogs();
          return { status: 200, body: { logs: result } };
+      },
+      "POST /api/server/logs": async (req, res, body) => {
+         const { minutes } = body;
+         const logs = await ServerApi.getLogs(minutes || 1);
+         console.log(logs);
+         return { status: 200, body: { logs } };
       },
       "POST /api/system/restart-xray": async () => {
          await ServerApi.restartXray();
@@ -306,7 +339,7 @@ function buildWebApi({ getConfig, ServerApi }) {
          const { status, body: resBody } = await handler(req, res, body);
          return sendJson(res, status, resBody);
       } catch (err) {
-         console.error("[web-api] Request error:", err?.stack ?? err);
+         log("error", "web-api", `Request error: ${err?.message ?? err}`);
          return sendJson(res, 500, { error: err.message || "Internal error" });
       }
    }
@@ -319,7 +352,7 @@ function buildWebApi({ getConfig, ServerApi }) {
       const port = parseInt(apiCfg.listen, 10);
 
       if (!port) {
-         console.warn("[web-api] No valid agent.api.listen port configured, skipping web server start");
+         log("warn", "web-api", "No valid agent.api.listen port configured, skipping web server start");
          return;
       }
 
@@ -332,18 +365,18 @@ function buildWebApi({ getConfig, ServerApi }) {
             const cert = fs.readFileSync(certFile);
             const key = fs.readFileSync(keyFile);
             server = https.createServer({ key, cert }, handleRequest);
-            server.listen(port, () => console.log(`[web-api] HTTPS listening on port ${port}`));
+            server.listen(port, () => log("success", "web-api", `HTTPS listening on port ${port}`));
          } catch (err) {
-            console.error("[web-api] Failed to load certificate, falling back to HTTP:", err.message);
+            log("error", "web-api", `Failed to load certificate, falling back to HTTP: ${err.message}`);
             server = http.createServer(handleRequest);
-            server.listen(port, () => console.log(`[web-api] HTTP listening on port ${port} (cert load failed)`));
+            server.listen(port, () => log("warn", "web-api", `HTTP listening on port ${port} (cert load failed)`));
          }
       } else {
          server = http.createServer(handleRequest);
-         server.listen(port, () => console.log(`[web-api] HTTP listening on port ${port}`));
+         server.listen(port, () => log("success", "web-api", `HTTP listening on port ${port}`));
       }
 
-      server.on("error", (err) => console.error("[web-api] Server error:", err.message));
+      server.on("error", (err) => log("error", "web-api", `Server error: ${err.message}`));
    }
 
    function stop() {
@@ -466,7 +499,7 @@ function request(method, endpoint, body = null, { retries = 2, retryDelay = 2000
          req.end();
       }).catch(async (err) => {
          if (attemptsLeft > 0) {
-            console.warn(`[api] Retrying ${endpoint} (${attemptsLeft} left): ${err.message}`);
+            log("warn", "api", `Retrying ${endpoint} (${attemptsLeft} left): ${err.message}`);
             await new Promise((r) => setTimeout(r, retryDelay));
             return attempt(attemptsLeft - 1);
          }
@@ -505,7 +538,7 @@ const SSH = {
       const { exitCode: e3, stderr: s3 } = await runCmd(`sudo adduser ${username} rocket`);
       if (e3 !== 0) throw new SSHError(`adduser to group failed for ${username}: ${s3}`, { username });
 
-      console.log(`[ssh] User added: ${username}`);
+      log("success", "ssh", `User added: ${username}`);
    },
 
    removeUser: async ({ username }) => {
@@ -516,13 +549,13 @@ const SSH = {
       if (exitCode !== 0 && !stderr.includes("does not exist")) {
          throw new SSHError(`userdel failed for ${username}: ${stderr}`, { username });
       }
-      console.log(`[ssh] User removed: ${username}`);
+      log("success", "ssh", `User removed: ${username}`);
    },
 
    updateUser: async ({ username, password }) => {
       const { exitCode, stderr } = await SSH._setPassword(username, password);
       if (exitCode !== 0) throw new SSHError(`setpassword failed for ${username}: ${stderr}`, { username });
-      console.log(`[ssh] Password updated: ${username}`);
+      log("success", "ssh", `Password updated: ${username}`);
    },
 
    _setPassword: async (username, password) => {
@@ -539,7 +572,7 @@ const Xray = {
       const { inbound_id, tag, protocol, port, settings, streamSettings, sniffing } = payload;
       xrayCLI.addInbound({ tag, protocol, port, settings, streamSettings, sniffing });
       await Xray._pushClientsForInbound(inbound_id, tag, protocol);
-      console.log(`[xray] Inbound added: ${tag}`);
+      log("success", "xray", `Inbound added: ${tag}`);
    },
 
    updateInbound: async (payload) => {
@@ -547,32 +580,31 @@ const Xray = {
       try {
          xrayCLI.delInbound(old_tag);
       } catch (err) {
-         console.warn(`[xray] delInbound(${old_tag}) failed (continuing):`, err.message);
+         log("warn", "xray", `delInbound(${old_tag}) failed (continuing): ${err.message}`);
       }
       xrayCLI.addInbound({ tag, protocol, port, settings, streamSettings, sniffing });
       await Xray._pushClientsForInbound(inbound_id, tag, protocol);
-      console.log(`[xray] Inbound updated: ${old_tag} → ${tag}`);
+      log("success", "xray", `Inbound updated: ${old_tag} → ${tag}`);
    },
 
    removeInbound: async ({ tag }) => {
       xrayCLI.delInbound(tag);
-      console.log(`[xray] Inbound removed: ${tag}`);
+      log("success", "xray", `Inbound removed: ${tag}`);
    },
 
    addClient: async (payload) => {
       const { uuid, email, inbound_tag, inbound_protocol } = payload;
       xrayCLI.addUser(inbound_protocol, inbound_tag, email, { id: uuid });
-      console.log(`[xray] Client added: ${email} → ${inbound_tag}`);
+      log("success", "xray", `Client added: ${email} → ${inbound_tag}`);
    },
 
    removeClient: async ({ email, inbound_tag }) => {
       xrayCLI.removeUser(inbound_tag, email);
-      console.log(`[xray] Client removed: ${email} from ${inbound_tag}`);
+      log("success", "xray", `Client removed: ${email} from ${inbound_tag}`);
    },
 
    _pushClientsForInbound: async (inbound_id, tag, protocol) => {
       const { clients } = await api.getInboundClients(inbound_id);
-      console.log("inbound_id", inbound_id, clients);
       if (!clients?.length) return;
 
       const errors = [];
@@ -584,8 +616,8 @@ const Xray = {
          }
       }
 
-      if (errors.length) console.warn(`[xray] Some clients failed for inbound ${tag}:`, errors);
-      console.log(`[xray] Pushed ${clients.length - errors.length}/${clients.length} clients to ${tag}`);
+      if (errors.length) log("warn", "xray", `Some clients failed for inbound ${tag}: ${JSON.stringify(errors)}`);
+      log("info", "xray", `Pushed ${clients.length - errors.length}/${clients.length} clients to ${tag}`);
    },
 };
 
@@ -593,7 +625,7 @@ const Xray = {
 
 const FullSync = {
    run: async () => {
-      console.log("[sync] Starting full sync...");
+      log("info", "sync", "Starting full sync...");
       const data = await api.getFullSync();
       const results = { inbounds: 0, clients: 0, ssh: 0, errors: [] };
 
@@ -615,8 +647,8 @@ const FullSync = {
          }
       }
 
-      console.log(`[sync] Done — inbounds: ${results.inbounds}, clients: ${results.clients}, ssh: ${results.ssh}`);
-      if (results.errors.length) console.error(`[sync] ${results.errors.length} errors:`, results.errors);
+      log("success", "sync", `Done — inbounds: ${results.inbounds}, clients: ${results.clients}, ssh: ${results.ssh}`);
+      if (results.errors.length) log("error", "sync", `${results.errors.length} errors: ${JSON.stringify(results.errors)}`);
    },
 };
 
@@ -643,7 +675,7 @@ const JobRunner = {
 
    start() {
       setInterval(() => JobRunner.poll(), cfg.jobsInterval);
-      console.log(`[jobs] Polling every ${cfg.jobsInterval}ms (batch concurrency ${JobRunner.CONCURRENCY})`);
+      log("info", "jobs", `Polling every ${cfg.jobsInterval}ms (batch concurrency ${JobRunner.CONCURRENCY})`);
    },
 
    async poll() {
@@ -653,10 +685,10 @@ const JobRunner = {
          const res = await api.getJobs();
          const jobs = res?.jobs ?? [];
          if (!jobs.length) return;
-         console.log(`[jobs] Batch received: ${jobs.length} job(s)`);
+         log("info", "jobs", `Batch received: ${jobs.length} job(s)`);
          await JobRunner.runBatch(jobs);
       } catch (err) {
-         console.error("[jobs] Poll error:", err.message);
+         log("error", "jobs", `Poll error: ${err.message}`);
       } finally {
          JobRunner.busy = false;
       }
@@ -684,13 +716,9 @@ const JobRunner = {
       try {
          await handler(payload);
          await api.completeJob(id, { status: "ok" });
-         console.log(`[jobs] Job #${id} done`);
+         log("success", "jobs", `Job #${id} done`);
       } catch (err) {
-         console.error(`[jobs] Job #${id} failed (${err.name}):`, {
-            message: err.message,
-            code: err.code,
-            ...(err.context ?? {}),
-         });
+         log("error", "jobs", `Job #${id} failed (${err.name}): ${err.message}`);
          await api.failJob(id, err.message);
       }
    },
@@ -700,83 +728,75 @@ const JobRunner = {
 
 const Traffic = {
    startSsh() {
-      let nethogsProc = null;
-      let lastValues = new Map(); // key: PID, value: { rx, tx }
-      let latestLine = null;
-      let buffer = "";
-
-      const spawnNethogs = () => {
-         if (nethogsProc) return; // already running
-
-         nethogsProc = spawn("sudo", ["nice", "-n", "10", "ionice", "-c2", "-n7", "nethogs", "-j", "-v2", "-d", "60", cfg.sshInterface || "eth0"]);
-
-         nethogsProc.stdout.on("data", (chunk) => {
-            buffer += chunk.toString();
-            const parts = buffer.split("\n");
-            buffer = parts.pop(); // keep incomplete last line
-            for (const line of parts) {
-               const trimmed = line.trim();
-               if (trimmed.startsWith("[")) {
-                  latestLine = trimmed;
-               }
-            }
-         });
-
-         nethogsProc.stderr.on("data", () => {}); // suppress "Adding local address" etc.
-
-         nethogsProc.on("exit", (code) => {
-            console.error("[nethogs] exited with code", code, "- restarting in 3s");
-            nethogsProc = null;
-            latestLine = null;
-            lastValues.clear(); // reset deltas since counters will restart from 0
-            setTimeout(spawnNethogs, 3000);
-         });
-
-         nethogsProc.on("error", (err) => {
-            console.error("[nethogs] failed to start:", err.message);
-            nethogsProc = null;
-         });
-      };
-
-      const run = async () => {
+      const runCycle = async () => {
          if (cfg.sshEnabled && cfg.sshTrafficEnabled) {
             try {
-               if (!nethogsProc) spawnNethogs();
-
-               if (latestLine) {
-                  const parsed = JSON.parse(latestLine);
-                  const activePids = new Set(parsed.map((c) => c.PID));
-
-                  const clients = parsed
-                     .filter((c) => c.UID > 0 && c.name.startsWith("sshd-session:"))
-                     .map((c) => {
-                        const prev = lastValues.get(c.PID) || { rx: 0, tx: 0 };
-                        const deltaRx = Math.max(0, c.RX - prev.rx);
-                        const deltaTx = Math.max(0, c.TX - prev.tx);
-                        lastValues.set(c.PID, { rx: c.RX, tx: c.TX });
-                        return {
-                           username: c.name.replace("sshd-session:", "").split("@")[0].trim(),
-                           rx: deltaRx,
-                           tx: deltaTx,
-                        };
-                     })
-                     .filter((c) => c.rx > 0 || c.tx > 0);
-
-                  // پاکسازی PID‌های session‌های بسته‌شده تا Map بی‌نهایت بزرگ نشه
-                  for (const pid of lastValues.keys()) {
-                     if (!activePids.has(pid)) lastValues.delete(pid);
-                  }
-
-                  if (clients.length) await api.sendSshTraffic(clients);
-               }
+               const clients = await Traffic._runNethogsOnce();
+               if (clients.length) await api.sendSshTraffic(clients);
             } catch (err) {
-               console.error("[traffic:ssh]", err.message);
+               log("error", "traffic:ssh", err.message);
             }
          }
-         setTimeout(run, cfg.sshTrafficInterval);
+         // چون خود nethogs به اندازه sshTrafficInterval طول می‌کشه،
+         // اینجا فقط یه فاصله‌ی کوچیک اضافه می‌کنیم (یا صفر)
+         setTimeout(runCycle, 0);
       };
+      runCycle();
+   },
 
-      run();
+   _runNethogsOnce() {
+      return new Promise((resolve, reject) => {
+         let buffer = "";
+         let finished = false;
+
+         const delaySec = Math.max(1, Math.round(cfg.sshTrafficInterval / 1000));
+         const proc = spawn("sudo", ["nice", "-n", "10", "ionice", "-c2", "-n7", "nethogs", "-j", "-v2", "-d", String(delaySec), "-c", "2", cfg.sshInterface || "eth0"]);
+
+         const safetyTimeout = setTimeout(() => {
+            if (!finished) {
+               proc.kill("SIGKILL");
+               finished = true;
+               reject(new Error("nethogs cycle timed out"));
+            }
+         }, delaySec * 1000 + 15000); // مدت -d + 15s فرصت اضافه
+
+         proc.stdout.on("data", (chunk) => {
+            buffer += chunk.toString();
+         });
+
+         proc.stderr.on("data", () => {});
+
+         proc.on("exit", () => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(safetyTimeout);
+
+            const validLines = buffer
+               .split("\n")
+               .map((l) => l.trim())
+               .filter((l) => l.startsWith("["));
+            if (!validLines.length) return resolve([]);
+
+            const lastLine = validLines[validLines.length - 1];
+
+            try {
+               const parsed = JSON.parse(lastLine);
+               const clients = parsed
+                  .filter((c) => c.UID > 0 && c.name.startsWith("sshd-session:"))
+                  .map((c) => ({
+                     username: c.name.replace("sshd-session:", "").split("@")[0].trim(),
+                     rx: c.RX,
+                     tx: c.TX,
+                  }))
+                  .filter((c) => c.rx > 0 || c.tx > 0);
+               resolve(clients);
+            } catch (err) {
+               reject(err);
+            }
+         });
+
+         proc.on("error", reject);
+      });
    },
    startOvpn() {
       const run = async () => {
@@ -788,7 +808,7 @@ const Traffic = {
                   if (clients.length) await api.sendOvpnTraffic(clients);
                }
             } catch (err) {
-               console.error("[traffic:ovpn]", err.message);
+               log("error", "traffic:ovpn", err.message);
             }
          }
          setTimeout(run, cfg.ovpnTrafficInterval);
@@ -803,7 +823,7 @@ const Traffic = {
                const result = xrayCLI.getTraffic();
                if (result?.data) await api.sendXrayTraffic(result.data);
             } catch (err) {
-               console.error("[traffic:xray]", err.message);
+               log("error", "traffic:xray", err.message);
             }
          }
          setTimeout(run, cfg.xrayTrafficInterval);
@@ -823,7 +843,7 @@ const Online = {
                const users = stdout.split("\n").filter((u) => u && u !== "root");
                if (users.length) await api.sendSshOnline(users);
             } catch (err) {
-               console.error("[online:ssh]", err.message);
+               log("error", "online:ssh", err.message);
             }
          }
          setTimeout(run, cfg.sshOnlineInterval);
@@ -841,7 +861,7 @@ const Online = {
                   if (clients.length) await api.sendOvpnOnline(clients);
                }
             } catch (err) {
-               console.error("[online:ovpn]", err.message);
+               log("error", "online:ovpn", err.message);
             }
          }
          setTimeout(run, cfg.ovpnOnlineInterval);
@@ -852,15 +872,27 @@ const Online = {
    parseOvpnStatus(log) {
       const clients = [];
       for (const line of log.split("\n")) {
-         if (!line.startsWith("CLIENT_LIST")) continue;
+         if (!line.startsWith("CLIENT_LIST,")) continue;
          const parts = line.split(",");
-         if (parts.length < 6) continue;
+         if (parts.length < 11) continue;
+
          const username = parts[1];
-         const ip = parts[2]?.split(":")[0];
-         const bytesReceived = parseInt(parts[4]) || 0;
-         const bytesSent = parseInt(parts[5]) || 0;
+         const rawAddress = parts[2];
+         const bytesReceived = parseInt(parts[5]) || 0;
+         const bytesSent = parseInt(parts[6]) || 0;
+         const clientId = parts[10];
+
+         const lastColonIdx = rawAddress.lastIndexOf(":");
+         const ip = lastColonIdx !== -1 ? rawAddress.substring(rawAddress.indexOf(":") + 1, lastColonIdx) : rawAddress;
+
          if (username && username !== "UNDEF") {
-            clients.push({ username, ip, bytes_received: bytesReceived, bytes_sent: bytesSent });
+            clients.push({
+               username,
+               ip,
+               session_id: clientId,
+               bytes_received: bytesReceived,
+               bytes_sent: bytesSent,
+            });
          }
       }
       return clients;
@@ -875,7 +907,7 @@ const ServerApi = {
          try {
             await ServerApi.collect();
          } catch (err) {
-            console.error("[stats]", err.message);
+            log("error", "stats", err.message);
          }
          setTimeout(run, cfg.statsInterval);
       };
@@ -945,7 +977,7 @@ const ServerApi = {
    },
 
    async setupProtocol(protocol) {
-      console.log("[server api] setup protocol...");
+      log("info", "server-api", "setup protocol...");
       if (protocol === "openvpn") {
          protocol = "ovpn";
       }
@@ -954,38 +986,65 @@ const ServerApi = {
    },
 
    getSetupLogs: async () => {
-      console.log("[system] get setup log...");
+      log("info", "system", "get setup log...");
       const raw = fs.readFileSync(SETUP_LOG_PATH, "utf8");
       return raw;
    },
 
    getOvpnClientFile: async () => {
-      console.log("[system] get ovpn client file...");
+      log("info", "system", "get ovpn client file...");
       const filePath = `/etc/openvpn/myuser.txt`;
       const raw = fs.readFileSync(filePath, "utf8");
       return raw;
    },
 
+   // لیست لاگ‌های خود سرویس rocket-agent رو از journalctl می‌گیره
+   // پارامتر minutes: چند دقیقه‌ی اخیر (پیش‌فرض 10، حداکثر 1440 = 24 ساعت)
+   getLogs: async (minutes) => {
+      const safeMinutes = Math.min(Math.max(parseInt(minutes, 10) || 10, 1), 1440);
+      log("info", "system", `get logs (last ${safeMinutes}m)...`);
+
+   
+      const { stdout } = await runCmd(`sudo journalctl -u ${SERVICE_NAME} --since "${safeMinutes} minutes ago" --no-pager -o json`, {
+         timeout: 15000,
+         throwOnError: true,
+      });
+
+      if (!stdout) return [];
+
+      return stdout
+         .split("\n")
+         .filter(Boolean)
+         .map((line) => {
+            try {
+               return parseJournalEntry(JSON.parse(line));
+            } catch {
+               return null;
+            }
+         })
+         .filter(Boolean);
+   },
+
    restartXray: async () => {
       const { exitCode, stderr } = await runCmd("sudo systemctl restart rxray");
       if (exitCode !== 0) throw new AgentError(`restart xray failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] Xray restarted");
+      log("success", "system", "Xray restarted");
    },
 
    restartSsh: async () => {
       const { exitCode, stderr } = await runCmd("sudo systemctl restart ssh sshd 2>/dev/null; true");
       if (exitCode !== 0) throw new AgentError(`restart ssh failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] SSH restarted");
+      log("success", "system", "SSH restarted");
    },
 
    restartOpenvpn: async () => {
       const { exitCode, stderr } = await runCmd("sudo systemctl restart openvpn");
       if (exitCode !== 0) throw new AgentError(`restart openvpn failed: ${stderr}`, "SYSTEM_ERROR");
-      console.log("[system] OpenVPN restarted");
+      log("success", "system", "OpenVPN restarted");
    },
 
    restartAgent: async () => {
-      console.log("[system] Agent restarting...");
+      log("warn", "system", "Agent restarting...");
       setTimeout(() => process.exit(0), 1000);
    },
 };
@@ -998,7 +1057,7 @@ const RemoteConfig = {
          try {
             await RemoteConfig.fetch();
          } catch (err) {
-            console.error("[remote-config]", err.message);
+            log("error", "remote-config", err.message);
          }
          setTimeout(run, cfg.remoteConfigInterval);
       };
@@ -1045,18 +1104,19 @@ const RemoteConfig = {
 
       try {
          fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
-         console.log("[remote-config] Config saved to file");
+         log("success", "remote-config", "Config saved to file");
       } catch (err) {
-         console.error("[remote-config] Failed to save config:", err.message);
+         log("error", "remote-config", `Failed to save config: ${err.message}`);
       }
 
-      console.log(
-         "[remote-config] Updated:",
-         JSON.stringify({
+      log(
+         "info",
+         "remote-config",
+         `Updated: ${JSON.stringify({
             ssh: { enabled: cfg.sshEnabled, traffic: cfg.sshTrafficEnabled },
             openvpn: { enabled: cfg.ovpnEnabled },
             xray: { enabled: cfg.xrayEnabled },
-         })
+         })}`
       );
    },
 };
@@ -1069,7 +1129,7 @@ const XrayFullConfig = {
          try {
             await XrayFullConfig.collect();
          } catch (err) {
-            console.error("[xray-config]", err.message);
+            log("error", "xray-config", err.message);
          }
          setTimeout(run, cfg.xrayConfigInterval);
       };
@@ -1079,11 +1139,11 @@ const XrayFullConfig = {
    async collect() {
       const result = await api.getXrayFullConfig();
       if (!result?.config) {
-         console.warn("[xray-config] Empty config received");
+         log("warn", "xray-config", "Empty config received");
          return;
       }
       fs.writeFileSync(config.xray.config_path, JSON.stringify(result.config, null, 2), "utf8");
-      console.log(`[xray-config] Saved to ${config.xray.config_path}`);
+      log("success", "xray-config", `Saved to ${config.xray.config_path}`);
    },
 };
 
@@ -1097,13 +1157,13 @@ const webApi = buildWebApi({
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 async function boot() {
-   console.log("[agent] Starting Rocket Agent...");
-   console.log(`[agent] Panel: ${config.panel_url}`);
+   log("info", "agent", "Starting Rocket Agent...");
+   log("info", "agent", `Panel: ${config.panel_url}`);
 
    try {
       await RemoteConfig.fetch();
    } catch (err) {
-      console.warn("[agent] Remote config failed, using local defaults:", err.message);
+      log("warn", "agent", `Remote config failed, using local defaults: ${err.message}`);
    }
 
    XrayFullConfig.start();
@@ -1119,5 +1179,5 @@ async function boot() {
 
 boot();
 
-process.on("unhandledRejection", (err) => console.error("[agent] unhandledRejection:", err?.stack ?? err));
-process.on("uncaughtException", (err) => console.error("[agent] uncaughtException:", err?.stack ?? err));
+process.on("unhandledRejection", (err) => log("error", "agent", `unhandledRejection: ${err?.stack ?? err}`));
+process.on("uncaughtException", (err) => log("error", "agent", `uncaughtException: ${err?.stack ?? err}`));
