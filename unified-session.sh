@@ -15,6 +15,12 @@ json_escape() {
     echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//'
 }
 
+# deterministic session id: same input -> same id, so connect & disconnect
+# events for the same session line up without needing local state/storage
+gen_session_id() {
+    echo -n "$1" | sha256sum | cut -c1-16
+}
+
 # ────────────────────────────────────────────
 # OpenVPN
 # ────────────────────────────────────────────
@@ -31,11 +37,16 @@ if [ -n "${script_type:-}" ]; then
     pass=$(json_escape "${password:-}")
     ip=$(json_escape "${trusted_ip:-${ifconfig_pool_remote_ip:-}}")
 
-    jsonData=$(printf '{"protocol":"%s","username":"%s","password":"%s","ip":"%s","bytes_received":"%s","bytes_sent":"%s"}' \
+    # stable across connect/disconnect of the SAME tunnel
+    session_key="${common_name:-}:${trusted_ip:-}:${trusted_port:-}"
+    session_id=$(gen_session_id "$session_key")
+
+    jsonData=$(printf '{"protocol":"%s","username":"%s","password":"%s","ip":"%s","session_id":"%s","bytes_received":"%s","bytes_sent":"%s"}' \
         "$protocol" \
         "$user" \
         "$pass" \
         "$ip" \
+        "$session_id" \
         "${bytes_received:-0}" \
         "${bytes_sent:-0}"
     )
@@ -62,10 +73,15 @@ elif [ -n "${PAM_TYPE:-}" ]; then
         ip=$(echo "${SSH_CONNECTION:-}" | awk '{print $1}')
     fi
 
+    # $PPID = pid of the sshd worker handling this connection; it stays the
+    # same from the auth stage through close_session for a given connection
+    session_key="${user}:${ip}:${PPID}"
+    session_id=$(gen_session_id "$session_key")
+
     user=$(json_escape "$user")
     ip=$(json_escape "$ip")
 
-    jsonData=$(printf '{"protocol":"%s","username":"%s","ip":"%s"}' "$protocol" "$user" "$ip")
+    jsonData=$(printf '{"protocol":"%s","username":"%s","ip":"%s","session_id":"%s"}' "$protocol" "$user" "$ip" "$session_id")
 else
     exit 0
 fi
@@ -82,7 +98,7 @@ response=$(curl -s -o /dev/null -w "%{http_code}" \
     -d "$jsonData" \
     "$apiUrl" 2>/dev/null) || response="000"
 
-log "protocol=$protocol user=$user endpoint=$endpoint ip=$ip response=$response"
+log "protocol=$protocol user=$user endpoint=$endpoint ip=$ip session_id=$session_id response=$response"
 
 [ "$endpoint" = "disconnect" ] && exit 0
 [ "$response" = "200" ] && exit 0
