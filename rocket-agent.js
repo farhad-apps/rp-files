@@ -92,7 +92,7 @@ const DEFAULTS = {
         bin: "/usr/local/bin/rxray",
         port: 62789,
         config_path: "/usr/local/bin/rxray/config.json",
-        intervals: { config: 300000, traffic: 30000 },
+        intervals: { config: 300000, traffic: 30000, online: 60000 },
     },
 };
 
