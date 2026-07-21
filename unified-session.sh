@@ -1,6 +1,5 @@
 #!/bin/bash
 set -uo pipefail
-
 CONFIG_JSON="${CONFIG_JSON:-/opt/rocket-plus/config.json}"
 PANEL_URL=$(jq -r '.panel_url // empty' "$CONFIG_JSON")
 API_TOKEN=$(jq -r '.api_token // empty' "$CONFIG_JSON")
@@ -21,7 +20,6 @@ json_escape() {
 # ────────────────────────────────────────────
 if [ -n "${script_type:-}" ]; then
     protocol="openvpn"
-
     case "$script_type" in
         user-pass-verify)  endpoint="connect"    ;;
         client-disconnect) endpoint="disconnect" ;;
@@ -31,11 +29,13 @@ if [ -n "${script_type:-}" ]; then
 
     user=$(json_escape "${username:-}")
     pass=$(json_escape "${password:-}")
+    ip=$(json_escape "${trusted_ip:-${ifconfig_pool_remote_ip:-}}")
 
-    jsonData=$(printf '{"protocol":"%s","username":"%s","password":"%s","bytes_received":"%s","bytes_sent":"%s"}' \
+    jsonData=$(printf '{"protocol":"%s","username":"%s","password":"%s","ip":"%s","bytes_received":"%s","bytes_sent":"%s"}' \
         "$protocol" \
         "$user" \
         "$pass" \
+        "$ip" \
         "${bytes_received:-0}" \
         "${bytes_sent:-0}"
     )
@@ -46,7 +46,7 @@ if [ -n "${script_type:-}" ]; then
 elif [ -n "${PAM_TYPE:-}" ]; then
     protocol="ssh"
     user="${PAM_USER:-}"
-    
+
     if ! id -nG "$user" 2>/dev/null | grep -qw "rocket"; then
         exit 0
     fi
@@ -57,9 +57,15 @@ elif [ -n "${PAM_TYPE:-}" ]; then
         *)             exit 0 ;;
     esac
 
-    user=$(json_escape "$user")
-    jsonData=$(printf '{"protocol":"%s","username":"%s"}' "$protocol" "$user")
+    ip="${PAM_RHOST:-}"
+    if [ -z "$ip" ]; then
+        ip=$(echo "${SSH_CONNECTION:-}" | awk '{print $1}')
+    fi
 
+    user=$(json_escape "$user")
+    ip=$(json_escape "$ip")
+
+    jsonData=$(printf '{"protocol":"%s","username":"%s","ip":"%s"}' "$protocol" "$user" "$ip")
 else
     exit 0
 fi
@@ -68,7 +74,6 @@ fi
 # Send to panel
 # ────────────────────────────────────────────
 apiUrl="${PANEL_URL}/session/${endpoint}"
-
 response=$(curl -s -o /dev/null -w "%{http_code}" \
     -m "$TIMEOUT" \
     -X POST \
@@ -77,11 +82,10 @@ response=$(curl -s -o /dev/null -w "%{http_code}" \
     -d "$jsonData" \
     "$apiUrl" 2>/dev/null) || response="000"
 
-log "protocol=$protocol user=$user endpoint=$endpoint response=$response"
+log "protocol=$protocol user=$user endpoint=$endpoint ip=$ip response=$response"
 
 [ "$endpoint" = "disconnect" ] && exit 0
 [ "$response" = "200" ] && exit 0
 
 log "AUTH FAILED: user=$user response=$response"
 exit 1
-
