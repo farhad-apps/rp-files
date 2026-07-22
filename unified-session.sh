@@ -69,13 +69,14 @@ elif [ -n "${PAM_TYPE:-}" ]; then
     esac
 
     ip="${PAM_RHOST:-}"
-    if [ -z "$ip" ]; then
-        ip=$(echo "${SSH_CONNECTION:-}" | awk '{print $1}')
+    client_port=""
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        # SSH_CONNECTION="client_ip client_port server_ip server_port"
+        read -r conn_ip client_port _ <<< "$SSH_CONNECTION"
+        [ -z "$ip" ] && ip="$conn_ip"
     fi
 
-    # $PPID = pid of the sshd worker handling this connection; it stays the
-    # same from the auth stage through close_session for a given connection
-    session_key="${user}:${ip}:${PPID}"
+    session_key="${user}:${ip}:${client_port}"
     session_id=$(gen_session_id "$session_key")
 
     user=$(json_escape "$user")
