@@ -4,6 +4,8 @@ const { execSync, exec } = require("child_process");
 const fs = require("fs");
 const { Buffer } = require("buffer");
 const { spawn } = require("child_process");
+const crypto = require("crypto");
+
 
 // ─── Logger ───────────────────────────────────────────────────────────────────
 // فرمت خروجی: [LEVEL] [tag] پیام
@@ -150,6 +152,10 @@ setInterval(() => {
 const cfg = {
     get sshEnabled() {
         return !!config.ssh?.enabled;
+    },
+
+    get sshPort() {
+        return config.ssh?.port ?? 22;
     },
 
     get ovpnEnabled() {
@@ -856,9 +862,8 @@ const Online = {
         const run = async () => {
             if (cfg.sshEnabled) {
                 try {
-                    const { stdout } = await runCmd("ps aux | grep -E 'sshd|stunnel' | grep -v grep | awk '{print $1}' | sort -u");
-                    const users = stdout.split("\n").filter((u) => u && u !== "root");
-                    if (users.length) await api.sendSshOnline(users);
+                    const sessions = await Online.getSshSessions();
+                    if (sessions.length) await api.sendSshOnline(sessions);
                 } catch (err) {
                     log("error", "online:ssh", err.message);
                 }
@@ -901,6 +906,41 @@ const Online = {
         run();
     },
 
+    async getSshSessions() {
+        const { stdout } = await runCmd(
+            `ss -tnp state established '( sport = :${cfg.sshPort} )'`
+        );
+        const sessions = [];
+        for (const line of stdout.split("\n")) {
+            const m = line.match(/(\d+\.\d+\.\d+\.\d+):(\d+)\s+users:/);
+            if (!m) continue;
+            const [, peerIp, peerPort] = m;
+
+            const pids = [...line.matchAll(/pid=(\d+)/g)].map((x) => parseInt(x[1], 10));
+            if (!pids.length) continue;
+
+            let username = null;
+            for (const pid of pids) {
+                try {
+                    const { stdout: userOut } = await runCmd(`ps -o user= -p ${pid}`);
+                    const u = userOut.trim();
+                    if (u && u !== "root") {
+                        username = u;
+                        break;
+                    }
+                } catch { }
+            }
+            if (!username) continue;
+
+            sessions.push({
+                username,
+                ip: peerIp,
+                session_id: Online.genSessionId(`${username}:${peerIp}:${peerPort}`),
+            });
+        }
+        return sessions;
+    },
+
     parseOvpnStatus(log) {
         const clients = [];
         for (const line of log.split("\n")) {
@@ -912,16 +952,19 @@ const Online = {
             const rawAddress = parts[2];
             const bytesReceived = parseInt(parts[5]) || 0;
             const bytesSent = parseInt(parts[6]) || 0;
-            const clientId = parts[10];
 
-            const lastColonIdx = rawAddress.lastIndexOf(":");
-            const ip = lastColonIdx !== -1 ? rawAddress.substring(rawAddress.indexOf(":") + 1, lastColonIdx) : rawAddress;
+            // rawAddress may be "ip:port" or "tcp4-server:ip:port" — always take
+            // the LAST TWO colon-separated segments as port and ip
+            const addrParts = rawAddress.split(":");
+            const port = addrParts.pop() || "";
+            const ip = addrParts.pop() || "";
 
             if (username && username !== "UNDEF") {
                 clients.push({
                     username,
                     ip,
-                    session_id: clientId,
+                    port, // ← موقتاً برای دیباگ
+                    session_id: Online.genSessionId(`${username}:${ip}:${port}`),
                     bytes_received: bytesReceived,
                     bytes_sent: bytesSent,
                 });
@@ -929,6 +972,9 @@ const Online = {
         }
         return clients;
     },
+    genSessionId(key) {
+        return crypto.createHash("sha256").update(key).digest("hex").slice(0, 16);
+    }
 };
 
 // ─── ServerApi ──────────────────────────────────────────────────────────────
