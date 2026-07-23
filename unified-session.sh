@@ -35,10 +35,14 @@ if [ -n "${script_type:-}" ]; then
 
     user=$(json_escape "${username:-}")
     pass=$(json_escape "${password:-}")
-    ip=$(json_escape "${trusted_ip:-${ifconfig_pool_remote_ip:-}}")
+    ovpn_ip="${untrusted_ip:-${trusted_ip:-}}"
+    ovpn_port="${untrusted_port:-${trusted_port:-}}"
+    ip=$(json_escape "$ovpn_ip")
 
-    # stable across connect/disconnect of the SAME tunnel
-    session_key="${common_name:-}:${trusted_ip:-}:${trusted_port:-}"
+    # NOTE: common_name is NOT reliably set at the user-pass-verify stage
+    # (only later, e.g. client-connect) — use username instead, which is
+    # guaranteed present here and matches what the node agent uses
+ session_key="${username:-}:${ovpn_ip}:${ovpn_port}"
     session_id=$(gen_session_id "$session_key")
 
     jsonData=$(printf '{"protocol":"%s","username":"%s","password":"%s","ip":"%s","session_id":"%s","bytes_received":"%s","bytes_sent":"%s"}' \
@@ -73,7 +77,7 @@ elif [ -n "${PAM_TYPE:-}" ]; then
     if [ -n "${SSH_CONNECTION:-}" ]; then
         # SSH_CONNECTION="client_ip client_port server_ip server_port"
         read -r conn_ip client_port _ <<< "$SSH_CONNECTION"
-        [ -z "$ip" ] && ip="$conn_ip"
+         [ -z "$ip" ] && ip="$conn_ip"
     fi
 
     session_key="${user}:${ip}:${client_port}"
@@ -99,7 +103,7 @@ response=$(curl -s -o /dev/null -w "%{http_code}" \
     -d "$jsonData" \
     "$apiUrl" 2>/dev/null) || response="000"
 
-log "protocol=$protocol user=$user endpoint=$endpoint ip=$ip session_id=$session_id response=$response"
+log "protocol=$protocol user=$user endpoint=$endpoint ip=$ip port=${ovpn_port:-${client_port:-}} session_id=$session_id response=$response"
 
 [ "$endpoint" = "disconnect" ] && exit 0
 [ "$response" = "200" ] && exit 0
