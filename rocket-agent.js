@@ -621,6 +621,17 @@ const Xray = {
         log("success", "xray", `Client added: ${email} → ${inbound_tag}`);
     },
 
+     updateClient: async (payload) => {
+        const { uuid, email, inbound_tag, inbound_protocol } = payload;
+        try {
+            xrayCLI.removeUser(inbound_tag, email);
+        } catch (err) {
+            log("warn", "xray", `removeUser(${email}) failed during update (continuing): ${err.message}`);
+        }
+        xrayCLI.addUser(inbound_protocol, inbound_tag, email, { id: uuid });
+        log("success", "xray", `Client updated: ${email} → ${inbound_tag} (new uuid)`);
+    },
+
     removeClient: async ({ email, inbound_tag }) => {
         xrayCLI.removeUser(inbound_tag, email);
         log("success", "xray", `Client removed: ${email} from ${inbound_tag}`);
