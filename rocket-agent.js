@@ -762,7 +762,7 @@ const JobRunner = {
 // ─── Traffic ──────────────────────────────────────────────────────────────────
 
 const Traffic = {
-    startSsh() {
+   startSsh() {
         const runCycle = async () => {
             if (cfg.sshEnabled && cfg.sshTrafficEnabled) {
                 try {
@@ -774,7 +774,7 @@ const Traffic = {
             }
             // چون خود nethogs به اندازه sshTrafficInterval طول می‌کشه،
             // اینجا فقط یه فاصله‌ی کوچیک اضافه می‌کنیم (یا صفر)
-            setTimeout(runCycle, 0);
+            setTimeout(runCycle, 2000);
         };
         runCycle();
     },
@@ -782,10 +782,15 @@ const Traffic = {
     _runNethogsOnce() {
         return new Promise((resolve, reject) => {
             let buffer = "";
+            let errBuffer = "";
             let finished = false;
 
             const delaySec = Math.max(1, Math.round(cfg.sshTrafficInterval / 1000));
-            const proc = spawn("sudo", ["nice", "-n", "10", "ionice", "-c2", "-n7", "nethogs", "-j", "-v2", "-d", String(delaySec), "-c", "2", cfg.sshInterface || "eth0"]);
+
+            const args = ["nice", "-n", "10", "ionice", "-c2", "-n7", "nethogs", "-j", "-v2", "-d", String(delaySec), "-c", "2"];
+            if (cfg.sshInterface) args.push(cfg.sshInterface);
+
+            const proc = spawn("sudo", args);
 
             const safetyTimeout = setTimeout(() => {
                 if (!finished) {
@@ -799,12 +804,16 @@ const Traffic = {
                 buffer += chunk.toString();
             });
 
-            proc.stderr.on("data", () => { });
+            proc.stderr.on("data", (chunk) => {
+                errBuffer += chunk.toString();
+            });
 
             proc.on("exit", () => {
                 if (finished) return;
                 finished = true;
                 clearTimeout(safetyTimeout);
+
+                if (errBuffer) log("error", "traffic:ssh:stderr", errBuffer.trim());
 
                 const validLines = buffer
                     .split("\n")
@@ -817,9 +826,12 @@ const Traffic = {
                 try {
                     const parsed = JSON.parse(lastLine);
                     const clients = parsed
-                        .filter((c) => c.UID > 0 && c.name.startsWith("sshd-session:"))
+                        .filter((c) => c.UID > 0 && /^sshd(-session)?:/.test(c.name))
                         .map((c) => ({
-                            username: c.name.replace("sshd-session:", "").split("@")[0].trim(),
+                            username: c.name
+                                .replace(/^sshd(-session)?:\s*/, "")
+                                .split("@")[0]
+                                .trim(),
                             rx: c.RX,
                             tx: c.TX,
                         }))
